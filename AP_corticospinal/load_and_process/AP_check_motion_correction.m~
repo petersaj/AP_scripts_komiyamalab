@@ -1,0 +1,219 @@
+function AP_check_motion_correction(animal)
+% AP_check_motion_correction(animal)
+% Check correlation of all motion corrected images for outliers
+
+%% Set paths 
+
+% Check if local computer
+local_comp = ispc;
+
+if ~local_comp
+    data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+    save_filename = ['/usr/local/lab/People/Andy/Data/motion_correction_check' filesep animal '_motion_correction_check'];
+else
+    data_path = ['Z:\People\Andy\Data\' animal];
+    save_filename = ['Z:\People\Andy\Data\motion_correction_check' filesep animal '_motion_correction_check'];
+end
+
+data_path_dir = dir(data_path);
+data_path_dir_days = cellfun(@(x) any(x),regexp({data_path_dir.name},'^\d\d\d\d\d\d$'));
+
+day_paths = cellfun(@(x) [data_path filesep x],{data_path_dir(([data_path_dir.isdir]) & data_path_dir_days).name},'uni',false);
+
+%% Check frames and fix
+
+% Initialize summary variable
+im_corr = struct('prefix',cell(length(day_paths),1),'postfix',cell(length(day_paths),1));
+
+for curr_day = 1:length(day_paths)
+    
+    % Load TIFF target (from Aki's motion correct)
+    target_dir = dir([day_paths{curr_day} filesep 'target' filesep '*.tif']);
+    target_file = [day_paths{curr_day} filesep 'target' filesep target_dir.name];
+    target_im = imread(target_file,'tiff');
+    
+    % Get TIFF filenames
+    tiff_dir = dir([day_paths{curr_day} filesep '*.tif']);
+    tiff_files = cellfun(@(x) [day_paths{curr_day} filesep x],sort({tiff_dir.name}),'uni',false);
+    
+    % If on local computer, create directory for temporary files
+    if local_comp
+        local_dir = 'C:\Users\Andy\Documents\KomiyamaLab\data\temp_files';
+        local_filename = [local_dir filesep 'temp_img.tif'];
+        if ~isdir(local_dir)
+            mkdir(local_dir)
+        end
+        % Delete local temp file if it exists
+        if exist(local_filename)
+            delete(local_filename)
+        end
+    end
+    
+    % Loop through TIFF files, get correlation to target image
+    for curr_tiff = 1:length(tiff_files)
+        
+        % If on local computer, copy image to temporary file, otherwise load
+        if ~local_comp
+            img_filename = [tiff_files{curr_tiff}];
+        else
+            disp('Copying movie to local drive...')
+            tic
+            copyfile(tiff_files{curr_tiff},local_filename);
+            toc
+            disp('Done.')
+            img_filename = local_filename;
+        end
+        
+        % Load current file
+        imageinfo=imfinfo(img_filename,'tiff');
+        numframes=length(imageinfo);
+        M=imageinfo(1).Height;
+        N=imageinfo(1).Width;
+        
+        curr_im_corr = nan(numframes,1);
+        disp(['Loading & correlating image (' tiff_files{curr_tiff} ')']);
+        tic
+        for loadframe = 1:numframes
+            im_temp = [];
+            im_temp = imread(img_filename,'tiff',loadframe,'Info',imageinfo);
+            curr_im_corr(loadframe) = corr2(im_temp,target_im);
+        end
+        toc
+        disp('Done.');
+        
+        % Store prefix image correlations
+        im_corr(curr_day).prefix{curr_tiff} = curr_im_corr;
+    end
+    
+    % Identify bad frames
+    % Sometimes almost entire file can be bad, so put in whole context
+    im_corr(curr_day).postfix = cellfun(@(x) nan(size(x)),im_corr(curr_day).prefix,'uni',false);    
+    im_corr_cat = vertcat(im_corr(curr_day).prefix{:});   
+    im_corr_cutoff =  median(im_corr_cat)-3*std(diff(im_corr_cat));
+    
+    bad_frames = cellfun(@(x) find(x < im_corr_cutoff),im_corr(curr_day).prefix,'uni',false);
+    
+    % Manually stopping acquisition gives few bad frames at end, ignore
+    end_frames = 10;
+    bad_frames{end}(bad_frames{end} >= length(im_corr(curr_day).prefix{end})-10) = [];
+    
+    
+    bad_files = find(cellfun(@(x) ~isempty(x),bad_frames));
+    
+    % Loop through files with bad frames and re-motion correct (from raw)  
+    if ~isempty(bad_files)
+        disp('Found bad frames, re-aligning...');
+        
+        for curr_tiff = bad_files'
+       
+            % Get raw movie filename
+            [~,curr_name] = fileparts(tiff_files{curr_tiff});
+            uncorrected_file = curr_name(1:strfind(curr_name,'_corrected')-1);
+            if ~local_comp
+                uncorrected_filename = ['/usr/local/lab/Data/ImagingRig3/' ...
+                    uncorrected_file(1:6) filesep animal filesep uncorrected_file '.tif'];
+            else
+                uncorrected_filename = ['Z:\Data\ImagingRig3\' ...
+                    uncorrected_file(1:6) filesep animal filesep uncorrected_file '.tif'];
+            end
+            
+            % If on local computer, copy image to temporary file
+            if ~local_comp
+                img_filename = [tiff_files{curr_tiff}];
+            else
+                disp('Copying bad movie to local drive...')
+                tic
+                copyfile(tiff_files{curr_tiff},local_filename);
+                toc
+                disp('Done.')
+                img_filename = local_filename;
+            end
+            
+            % Get TIFF information
+            imageinfo=imfinfo(img_filename,'tiff');
+            numframes=length(imageinfo);
+            M=imageinfo(1).Height;
+            N=imageinfo(1).Width;
+            
+            % Open TIFF for overwriting and get parsing parameters
+            t = Tiff(img_filename,'r+');
+            NumberOfStrips = t.numberOfStrips;
+            RowsPerStrip = t.getTag('RowsPerStrip');
+           
+            % Load in bad frames, re-align, replace image data
+            disp('Re-correcting and replacing bad frames...')
+            for curr_bad_frame = bad_frames{curr_tiff}'
+                
+                % Load raw frame
+                im_temp = imread(uncorrected_filename,'tiff',curr_bad_frame);
+                
+                % Align frame via 2d cross correlation
+                cc = normxcorr2(im_temp,target_im);
+                
+                % Get the point of max correlation
+                xcorr_midpoint = round(length(cc)/2);
+                [max_c,imax] = max(cc(:));
+                [ypeak xpeak] = ind2sub(size(cc),imax(1));
+                corr_offset = [(ypeak-size(im_temp,2)) ...
+                    (xpeak-size(im_temp,1))];
+                
+                % Shift image, set off-screen pixels to black
+                im_aligned = circshift(im_temp,corr_offset);
+                offscreen_idx = false(512,512);
+                offscreen_idx(1:abs(corr_offset(1)),:) = true;
+                offscreen_idx(:,1:abs(corr_offset(2))) = true;
+                offscreen_idx = circshift(offscreen_idx,corr_offset.*(corr_offset<0));
+                im_aligned(offscreen_idx) = 0;
+                
+                % Replace bad TIFF image with re-aligned image                
+                % split re-aligned image into correct number of strips
+                curr_strips = mat2cell(im_aligned,repmat(RowsPerStrip,NumberOfStrips,1),N);
+                % set current frame
+                t.setDirectory(curr_bad_frame);
+                for curr_strip = 1:length(curr_strips)
+                    writeEncodedStrip(t,curr_strip,curr_strips{curr_strip});
+                end
+     
+                % Store postfix image correlations
+                im_corr(curr_day).postfix{curr_tiff}(curr_bad_frame) = corr2(im_aligned,target_im);
+                disp(curr_bad_frame);
+            end
+       
+            % Close the edited TIFF object
+            close(t);
+            
+            % If on local computer, copy re-corrected file back to server
+            if local_comp
+                disp('Copying re-corrected movie to server...')
+                tic
+                copyfile(img_filename,tiff_files{curr_tiff});
+                toc
+                disp('Done.')
+            end
+            
+        end
+        disp('Done.')
+    end
+end
+    
+
+% Save summary of pre and post image correlations
+disp('Saving image correlation summary')
+save(save_filename,'im_corr');
+
+disp(['Finished checking motion correction for ' animal]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

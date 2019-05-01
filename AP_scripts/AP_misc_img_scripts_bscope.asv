@@ -1,0 +1,272 @@
+%% Get trace and behavior times
+
+% Get behavior
+[bhv_filename bhv_path] = uigetfile('*','Behavior file');
+warning off
+bhv = load([bhv_path bhv_filename],'-MAT');
+warning on
+parsed_events = bhv.saved_history.ProtocolsSection_parsed_events;
+
+num_trials = length(parsed_events);
+
+all_reward = cellfun(@(x) x.states.reward, parsed_events,'UniformOutput',0);
+all_cue = cellfun(@(x) x.states.cue, parsed_events,'UniformOutput',0);
+all_iti = cellfun(@(x) x.states.iti, parsed_events,'UniformOutput',0);
+all_licks = cellfun(@(x) x.pokes.C(:,1), parsed_events,'UniformOutput',0);
+
+% get trial starts and ends
+all_trial_start = cellfun(@(x) x.states.state_0(1,2), parsed_events,'UniformOutput',0);
+all_trial_end = cellfun(@(x) x.states.state_0(2,1), parsed_events,'UniformOutput',0);
+
+reward_trials = [cellfun(@(x) ~isempty(x), all_reward)];
+
+% NOTE ON SETUP: C = lickport, L = lever
+% Index if/which lever press ended the cue state
+lever_cue_indx = cellfun(@(x) find(x.pokes.L(:,1) == x.states.cue(:,2)), parsed_events,'UniformOutput',0);
+
+% Get lever force
+[acq_filename_all acq_path] = uigetfile('*.xsg','Choose XSG files','Multiselect','on');
+lever_force_split = cell(length(acq_filename_all),1);
+
+lever_force = [];
+trial_list = [];
+lever_force = [];
+bitcode_trace = [];
+trial_stitch = []; 
+% At the moment, concatenate all and pretend no interruption
+disp('ASSUMING: 8 FULL FILES FOR EACH LOOP')
+
+% Get framerate
+
+% Woah woah WOAH woah woah - this isn't always correct! This depends on
+% hitting the 'measure framerate' button at the beginning, and even then 
+% it may not be right. Here's what we'll do instead: above, get the
+% framerate by dividing the number of frames by the length of the xsg in
+% seconds. Note that this is not robust to dropped frames.
+% Edit: at the moment, I know how many frames there should be, so I'll just
+% hardcode it. 
+% 2nd Edit: This doesn't make sense - the XSG is slightly longer than the
+% acq, the ONLY information is 'framerate' in the header, which is really
+% bullshit that it's not. For now, assume it's right, but fix for AP60
+% which I know didn't have measured framerate for the first couple days
+% disp('ASSUMING 4000 FRAMES per XSG!');
+% framerate = 4000/(mean(cellfun(@length,lever_force_split))/xsg_sample_rate);
+
+[img_filename img_path] = uigetfile('*.tif','Pick sample file','Multiselect','off');
+img_info = imfinfo([img_path img_filename]);
+img_info = img_info(1).ImageDescription;
+[img_parameter img_value] = strread(img_info,'%s %s', 'delimiter','=\n');
+
+framerate_indx = cell2mat(cellfun(@(x) ~isempty(strfind(x,'scanimage.SI4.scanFrameRate')),img_parameter,'UniformOutput',0));
+framerate = str2num(img_value{framerate_indx});
+
+if strcmp(img_filename(8:11),'AP60')
+    framerate = 28.7224;
+    disp('OVERRIDING FRAMERATE FOR AP60! NOT PERMANENT SOLUTION TO THIS PROBLEM!')
+end
+
+for i = 1:length(acq_filename_all);
+    xsg = load([acq_path acq_filename_all{i}],'-MAT');
+    
+    % Get all trial offsets in samples
+    xsg_sample_rate = xsg.header.acquirer.acquirer.sampleRate;
+    
+    % Get trials in raw samples since started
+    curr_trial_list = [];
+    curr_trial_list = AP_ReadBitCode([acq_path acq_filename_all{i}]);
+    if ~isempty(curr_trial_list)
+        curr_trial_list(:,1) = curr_trial_list(:,1) + length(lever_force)/xsg_sample_rate;
+        trial_list = [trial_list; curr_trial_list];
+    end
+    
+    % Cut out pieces of the lever trace that weren't imaged (dropped
+    % frames) - Assume they were clipped at the end
+    curr_loop_frames = sum(cellfun(@length,roi_trace_long_split((8*(i-1)+1):8*i)));
+    curr_imaged_lever_samples = round((curr_loop_frames/framerate)*xsg_sample_rate);
+    curr_lever_trace = xsg.data.acquirer.trace_2(1:curr_imaged_lever_samples);
+
+    bitcode_trace = [bitcode_trace; xsg.data.acquirer.trace_1];
+    lever_force_split{i} = xsg.data.acquirer.trace_2;
+    lever_force = [lever_force; curr_lever_trace];
+    trial_stitch = [trial_stitch trial_list(end,2)];
+end
+
+% resample lever force to be 1:1 with numframes
+numframes = size(roi_trace_df,2);
+% to make resampling work: numframes must be even number
+% if it's not, cut out one frame at the end
+if mod(numframes,2) ~= 0
+    roi_trace_df(:,end) = [];
+    numframes = size(im,2);
+end
+% resample lever force to so # samples = # frames
+[n d] = rat(numframes/length(lever_force));
+lever_force_resample = resample(lever_force,n,d);
+% add or delete last sample if necessary
+if length(lever_force_resample) < numframes
+    lever_force_resample(end+1:numframes) = 0;
+elseif length(lever_force_resample) > numframes
+    lever_force_resample = lever_force_resample(1:numframes);
+end
+
+% Get trial offsets (seconds)
+xsg_bhv_offset = nan(num_trials,1);
+for curr_trial = 1:num_trials
+    xsg_trial_indx = find(trial_list(:,2) == curr_trial,1);
+    if ~isempty(xsg_trial_indx)
+        xsg_bhv_offset(curr_trial) = ...
+            trial_list(xsg_trial_indx,1) - ...
+            all_trial_start{curr_trial}(1);
+    else
+       continue;
+    end
+end
+
+% Get dispatcher times in frames
+cue_frames = [];
+reward_frames = [];
+lick_frames = [];
+for curr_trial = 1:length(xsg_bhv_offset);
+    if isnan(xsg_bhv_offset(curr_trial))
+        continue
+    end
+    
+    % relative cue time
+    cue_frames = [cue_frames;(all_cue{curr_trial}(1,1) + xsg_bhv_offset(curr_trial))*framerate];
+    % relative reward time
+    if ~isempty(all_reward{curr_trial})
+    reward_frames = [reward_frames;(all_reward{curr_trial}(1,1) + xsg_bhv_offset(curr_trial))*framerate];
+    end
+    % relative lick time
+    lick_frames = [lick_frames;(all_licks{curr_trial} + xsg_bhv_offset(curr_trial))*framerate];
+end
+    
+%% Get calcium transients (the dumb way)
+
+%peakstd = [1.5*ones(1,5) 1*ones(1,10)]; % definitions for max trigger, in stds
+peakstd = [1.5*ones(1,10)]; % definitions for max trigger, in stds
+peak_back = 20;
+local_max = 30;
+drop_percentage = .5;
+spike_frames = {};
+movie_frames = 4000;
+
+num_rois = size(roi_trace_long,1);
+
+% this is to catch a dumb bug: if ROI is offscreen, just make noise
+for i = 1:num_rois
+    if all(roi_trace_long(i,:) == roi_trace_long(i,1))
+        roi_trace_long(i,:) = rand(size(roi_trace_long(i,:)));
+    end
+end
+
+% Estimate noise through smoothing
+size_smooth = 30;
+smooth_type = 'loess';
+size_file = 4000;
+roi_trace_df_smooth = zeros(size(roi_trace_df));
+for i = 1:size(roi_trace_df,1);
+    for j = 1:size(roi_trace_df,2)/size_file;
+        roi_trace_df_smooth(i,size_file*(j-1)+1:size_file*(j-1)+size_file) = smooth(roi_trace_df(i,size_file*(j-1)+1:size_file*(j-1)+size_file),size_smooth,smooth_type);
+    end
+end
+smooth_std = zeros(size(roi_trace_df,1),1);
+smooth_std = sqrt(sum((abs(roi_trace_df - roi_trace_df_smooth).^2)/size(roi_trace_df_smooth,2),2));
+
+parfor i = 1:num_rois
+    % Estimate noise through smoothing
+    curr_trace_std = smooth_std(i);
+    minpeak = curr_trace_std*peakstd;
+    spike_frames{i} = ap_schmittDetect(roi_trace_df_smooth(i,:),minpeak,peak_back,local_max,drop_percentage);
+    disp([num2str(i) '/' num2str(num_rois)])
+end
+
+% make spike matrix
+spike_matrix = zeros(size(roi_trace_df));
+for i = 1:num_rois
+   spike_matrix(i,spike_frames{i}) = 1; 
+end
+
+% for i = 1:num_rois
+%     % eliminate peaks at file junctions because they're mistimed
+%     if ~isempty(spike_frames{i})
+%         file_stitch = [];
+%         file_stitch = find(mod(spike_frames{i}-1,movie_frames) == 0);
+%         peak_frames(file_stitch,:) = [];
+%     end
+% end
+
+%%%% what's been kind of working
+%[peak_frames] = ap_schmittDetect(roi_trace_long(24,:),minpeak,5,20,0.5);
+%%%%
+
+%% Plot trace / behavior / cell
+% requires: roi_trace_df, last cell to be run
+curr_cell = 309;
+
+figure;hold on;
+plot(roi_trace_df(curr_cell,:),'-b');
+plot(lever_force_resample,'--r');
+if exist('spike_frames')
+    plot(spike_frames{curr_cell},roi_trace_df_smooth(curr_cell,spike_frames{curr_cell}),'.k','MarkerSize',30)
+end
+% plot cues as magenta lines
+for i = 1:length(cue_frames)
+    line([cue_frames(i) cue_frames(i)],ylim,'color','m');
+end
+% plot rewards as green lines
+for i = 1:length(reward_frames)
+    line([reward_frames(i) reward_frames(i)],ylim,'color','g');
+end
+% plot licks as black dots
+plot(lick_frames,2,'.k');
+
+% plot around reward
+frames_surround = 200;
+roi_reward = nan(length(reward_frames),frames_surround*2+1);
+for i = 1:length(reward_frames);
+    curr_reward = round(reward_frames(i));
+    roi_reward_frames = curr_reward-frames_surround:curr_reward+frames_surround;
+    if any(roi_reward_frames<=0) || any(roi_reward_frames>size(roi_trace_df,2));
+        continue
+    end
+    roi_reward(i,:) = roi_trace_df(curr_cell,roi_reward_frames);
+end
+figure;imagesc(roi_reward);
+line([frames_surround+1 frames_surround+1],ylim,'LineWidth',2,'color','w',...
+    'LineStyle','--');
+
+
+
+
+%% Make spike triggered avg 
+% (requires last two cells run)
+
+curr_cell = 100;
+frames_surround = 100;
+lever_spike = nan(length(spike_frames{curr_cell}),frames_surround*2+1);
+lever_diff_spike = nan(length(spike_frames{curr_cell}),frames_surround*2);
+trace_spike = nan(length(spike_frames{curr_cell}),frames_surround*2+1);
+for i = 1:length(spike_frames{curr_cell})
+    curr_spike = round(spike_frames{curr_cell}(i));
+    lever_spike_frames = curr_spike-frames_surround:curr_spike+frames_surround;
+    if any(lever_spike_frames<=0) || any(lever_spike_frames>size(roi_trace_df,2));
+        continue
+    end
+    lever_spike(i,:) = lever_force_resample(lever_spike_frames);
+    lever_diff_spike(i,:) = diff(lever_force_resample(lever_spike_frames));
+    trace_spike(i,:) = roi_trace_df(curr_cell,lever_spike_frames);
+end
+
+figure;
+imagesc(lever_spike);
+figure;
+imagesc(trace_spike);
+
+%% PCA of the lever presses 
+% requires all of the above
+lever_spike_nonan = lever_spike;
+lever_spike_nonan(all(isnan(lever_spike),2),:) = [];
+[coeff,score,latent] = princomp(lever_spike_nonan);
+
+

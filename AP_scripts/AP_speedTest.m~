@@ -1,0 +1,21 @@
+clear all
+
+temp = magic(2000);
+
+matrixmath = zeros(1,1);
+tic;
+temp*temp; ...
+matrixmath = toc;
+
+memalloc = zeros(1);
+tic;
+a = [];
+d(1) = toc;
+memalloc.multlines = d;
+
+
+bench_temp = bench(5);
+close all;
+matlab_bench = median(bench_temp(:,1:4));
+
+

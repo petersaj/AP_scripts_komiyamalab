@@ -1,0 +1,807 @@
+%% 1E: example dendrite/soma images and traces
+
+% Load example cropped image
+crop_img_filename = '/usr/local/lab/People/Andy/Corticospinal/corticospinal_paper/figures/dendrite_soma_examples_figure/151212_AP163_region3_cell1_crop.tif';
+im = double(AP_load_tiff(crop_img_filename));
+
+% Plot images and projections
+figure;
+subplot(3,2,1);
+imagesc(im(:,:,1));colormap(gray);
+axis off
+axis square
+title('Dendrite plane')
+
+subplot(3,2,2);
+imagesc(im(:,:,end-4));colormap(gray);
+axis off
+axis square
+title('Soma plane')
+
+subplot(3,2,3);
+curr_projection_norm = max(bsxfun(@times,im,1./ ...
+    repmat(max(max(im,[],2),[],1),size(im,1),size(im,2))),[],3);
+imagesc(curr_projection_norm);colormap(gray);
+axis off
+axis square
+title('Z-projection');
+
+subplot(3,2,4);
+curr_projection = permute(max(im,[],1),[3,2,1]);
+curr_projection_norm = bsxfun(@times,curr_projection,1./max(curr_projection,[],2));
+imagesc(curr_projection_norm);colormap(gray);
+axis off
+title('X-projection (z max-normalized)')
+
+subplot(3,2,5);
+curr_projection = permute(max(im,[],2),[3,1,2]);
+curr_projection_norm = bsxfun(@times,curr_projection,1./max(curr_projection,[],2));
+imagesc(curr_projection_norm);colormap(gray);
+axis off
+title('Y-projection (z max-normalized)')
+
+% Get and plot trace
+subplot(3,2,6); hold on;
+curr_example_dayanimal = '151212_AP163';
+curr_example_region = 'region3';
+curr_example_cell = '1';
+curr_example_path = [ ...
+    '/usr/local/lab/People/Andy/Data/corticospinal_fastz_imaging/' ...
+    curr_example_dayanimal filesep curr_example_region filesep curr_example_cell];
+
+roi_path = [curr_example_path filesep 'motion_corrected/summed'];
+roi_dir = dir([roi_path filesep '*.roi']);
+roi_filenames = cellfun(@(x) [roi_path filesep x],sort({roi_dir(:).name}),'uni',false);
+
+mc_path = [curr_example_path filesep 'motion_corrected'];
+roi_trace = AP_getConcatTrace_continuous_batch_fastz( ...
+    roi_filenames,[1,2],mc_path);
+
+dendrite_trace_df = cell2mat(arrayfun(@(x) (roi_trace{1}(x,:) - ...
+    prctile(roi_trace{1}(x,:),10))./ ...
+    prctile(roi_trace{1}(x,:),10),[1:size(roi_trace{1},1)]','uni',false));
+
+soma_trace_df = cell2mat(arrayfun(@(x) (roi_trace{2}(x,:) - ...
+    prctile(roi_trace{2}(x,:),10))./ ...
+    prctile(roi_trace{2}(x,:),10),[1:size(roi_trace{2},1)]','uni',false));
+
+dendrite_trace_df_norm = bsxfun(@times,dendrite_trace_df,1./max(dendrite_trace_df,[],2));
+soma_trace_df_norm = bsxfun(@times,soma_trace_df,1./max(soma_trace_df,[],2));
+
+plot(soma_trace_df_norm,'k');
+plot(bsxfun(@plus,dendrite_trace_df_norm',1:size(dendrite_trace_df_norm,1)),'r');
+
+xlim([1 length(soma_trace_df)]);
+title('Soma/Dendrite fluorescence')
+axis off
+
+
+%% 2C: example population traces
+
+example_data_file = '/usr/local/lab/People/Andy/Data/AP141/AP141_batch_thresh_roi/150726_AP141_001_001_summed_50_analysis.mat';
+curr_data = load(example_data_file);
+
+use_rois = [4,5,6,7,15,20,21,24,28,30,35,37,38,41,44,46,50,52,13,18];
+
+curr_df = curr_data.im.roi_trace_df(use_rois,:);
+
+% Threshold
+event_thresh = 3;
+method = 2;
+curr_thresh = AP_caEvents_thresh(curr_df,event_thresh,method);
+
+% use 5 minutes of data
+use_time = 5*60;
+first_frame = 13200;
+last_frame = find(curr_data.bhv.frame_times < ...
+    curr_data.bhv.frame_times(first_frame) + use_time,1,'last');
+frame_time = (curr_data.bhv.frame_times(first_frame:last_frame) - ...
+    curr_data.bhv.frame_times(first_frame))/60;
+
+% Plot, color example branch ROIs (x-axis is in minutes)
+df_space = 7;
+figure; 
+subplot(1,2,1); hold on;
+plot(frame_time,bsxfun(@plus,curr_df(1:end-2,first_frame:last_frame)', ...
+    (1:size(curr_df,1)-2)*df_space),'k');
+plot(frame_time,bsxfun(@plus,curr_df(end-1:end,first_frame:last_frame)', ...
+    (size(curr_df,1)-1:size(curr_df,1))*df_space),'b');
+
+subplot(1,2,2); hold on;
+plot(frame_time,bsxfun(@plus,curr_thresh(:,first_frame:last_frame)', ...
+    (1:size(curr_df,1))*df_space),'color',[0.7,0.7,0.7]);
+
+%% 3B: behavior - timing and fraction of rewarded trials
+
+num_animals = length(analysis);
+
+% Rewarded trials
+rewarded_trials = arrayfun(@(curr_animal) cellfun(@(x) ...
+    cellfun(@(x) ~isempty(x.states.reward),x), ...
+    {data(curr_animal).bhv(:).bhv_times},'uni',false),1:num_animals,'uni',false);
+rewarded_frac = cellfun(@(x) cellfun(@nanmean,x),rewarded_trials,'uni',false);
+
+% Reaction time
+median_reaction_time = arrayfun(@(x) cellfun(@(param,trials) median(param(trials)), ...
+    {analysis(x).lever.reaction_time},{analysis(x).lever.cued_movement_trials}),1:num_animals,'uni',false);
+
+% Movement onset to reward time
+median_move_to_reward_time = arrayfun(@(x) cellfun(@(param,trials) median(param(trials)), ...
+    {analysis(x).lever.move_to_reward_time},{analysis(x).lever.cued_movement_trials}),1:num_animals,'uni',false);
+
+% Total ovement time
+median_movement_time = arrayfun(@(x) cellfun(@(param,trials) median(param(trials)), ...
+    {analysis(x).lever.rewarded_movement_time},{analysis(x).lever.cued_movement_trials}),1:num_animals,'uni',false);
+
+% Plot
+
+figure; 
+
+rewarded_frac_cat = vertcat(rewarded_frac{:});
+subplot(2,2,1);
+errorbar(nanmean(rewarded_frac_cat),nanstd(rewarded_frac_cat)./ ...
+    sqrt(sum(~isnan(rewarded_frac_cat))),'k','linewidth',2);
+xlim([0 15]);
+ylabel('Fraction rewarded trials')
+xlabel('Day')
+
+movement_time_cat = vertcat(median_movement_time{:});
+subplot(2,2,2);
+errorbar(nanmean(movement_time_cat),nanstd(movement_time_cat)./ ...
+    sqrt(sum(~isnan(movement_time_cat))),'k','linewidth',2);
+xlim([0 15]);
+ylabel('Median movement time (s)')
+xlabel('Day')
+
+reaction_time_cat = vertcat(median_reaction_time{:});
+subplot(2,2,3);
+errorbar(nanmean(reaction_time_cat),nanstd(reaction_time_cat)./ ...
+    sqrt(sum(~isnan(reaction_time_cat))),'k','linewidth',2);
+xlim([0 15]);
+ylabel('Median reaction time (s)')
+xlabel('Day')
+
+move_to_reward_time_cat = vertcat(median_move_to_reward_time{:});
+subplot(2,2,4);
+errorbar(nanmean(move_to_reward_time_cat),nanstd(move_to_reward_time_cat)./ ...
+    sqrt(sum(~isnan(move_to_reward_time_cat))),'k','linewidth',2);
+xlim([0 15]);
+ylabel('Median move to reward time (s)')
+xlabel('Day')
+
+
+%% 3C: behavior - cued-rewarded movement correlation
+
+num_animals = length(analysis);
+
+% Plot the trial-by-trial movement correlation
+movement_start_time = 1001; % (defined in prepare_processed);
+movement_use_time = 1000; % ms 
+
+% (do in loop in case dispatcher file not saved, was in old cohort)
+max_sessions = max(arrayfun(@(x) length(analysis(x).lever),1:num_animals));
+movement_use_trials = cell(num_animals,1);
+for curr_animal = 1:num_animals    
+   for curr_session = 1:length(analysis(curr_animal).lever)
+      if ~isempty(analysis(curr_animal).lever(curr_session).rewarded_movement_fixtime)
+          
+          curr_move = ...
+              horzcat(analysis(curr_animal).lever(curr_session).rewarded_movement_fixtime{ ...
+              analysis(curr_animal).lever(curr_session).cued_movement_trials});
+          
+          movement_use_trials{curr_animal}{curr_session} = curr_move;          
+      end
+   end
+end
+
+movement_corr_grid = nan(max_sessions,max_sessions,num_animals);
+for curr_animal = 1:num_animals
+    for session_x = 1:length(analysis(curr_animal).lever);
+        for session_y = 1:length(analysis(curr_animal).lever)            
+            if ~isempty(movement_use_trials{curr_animal}{session_x}) && ...
+                    ~isempty(movement_use_trials{curr_animal}{session_y})
+                
+                num_trials_x = size(movement_use_trials{curr_animal}{session_x},2);
+                
+                curr_move_corr = corrcoef([movement_use_trials{ ...
+                    curr_animal}{session_x}(movement_start_time:movement_start_time+movement_use_time,:) ...
+                    movement_use_trials{curr_animal}{session_y}( ...
+                    movement_start_time:movement_start_time+movement_use_time,:)]);
+                
+                curr_use_corr = curr_move_corr(1:num_trials_x,num_trials_x+1:end);
+                
+                movement_corr_grid(session_x,session_y,curr_animal) = nanmedian(curr_use_corr(:));
+                
+            end
+        end
+    end
+end
+
+
+% Movement correlation
+figure; 
+subplot(1,3,1);
+imagesc(nanmean(movement_corr_grid,3));colormap(hot);
+ylabel('Day');
+xlabel('Day');
+title('Movement correlation');
+
+first_movecorr_diag = cell2mat(arrayfun(@(x) diag(movement_corr_grid(:,:,x)), ...
+    1:size(movement_corr_grid,3),'uni',false))';
+second_movecorr_diag = cell2mat(arrayfun(@(x) diag(movement_corr_grid(:,:,x),-1), ...
+    1:size(movement_corr_grid,3),'uni',false))';
+
+subplot(2,3,2);
+plot(first_movecorr_diag','linewidth',2);
+xlim([0 15]);
+ylabel('Median movement correlation')
+xlabel('Day');
+title('Within day');
+
+subplot(2,3,3);
+errorbar(nanmean(first_movecorr_diag),nanstd(first_movecorr_diag)./ ...
+    sqrt(sum(~isnan(first_movecorr_diag))),'k','linewidth',2);
+xlim([0 15]);
+ylabel('Median movement correlation')
+xlabel('Day');
+title('Within day');
+
+subplot(2,3,5);
+plot(second_movecorr_diag','linewidth',2);
+xlim([0 14]);
+ylabel('Median movement correlation')
+xlabel('Day v. next day');
+title('Next day');
+
+subplot(2,3,6);
+errorbar(nanmean(second_movecorr_diag),nanstd(second_movecorr_diag)./ ...
+    sqrt(sum(~isnan(second_movecorr_diag))),'k','linewidth',2);
+xlim([0 14]);
+ylabel('Median movement correlation')
+xlabel('Day v. next day');
+title('Next day');
+
+
+
+%% 4A: example movement/quiescent activity
+
+use_animal = 2;
+use_day = 7;
+use_frames = 22500:25020;
+
+% Classified ROIs
+curr_m = classified_rois(use_animal).movement(:,use_day);
+curr_q = classified_rois(use_animal).quiescent(:,use_day);
+
+% Classified ROI population average
+m_avg_act = nanmean(data(use_animal).im(use_day).roi_trace_df(curr_m,use_frames),1);
+q_avg_act = nanmean(data(use_animal).im(use_day).roi_trace_df(curr_q,use_frames),1);
+
+% Lever position
+move_frames = analysis(use_animal).lever(use_day).lever_move_frames(use_frames);
+lever_position = analysis(use_animal).lever(use_day).lever_position_frames(use_frames);
+
+% Cue frames
+cue_frames = cell2mat(cellfun(@(x) x.states.cue(1):x.states.cue(end), ...
+    data(use_animal).bhv(use_day).bhv_frames,'uni',false)');
+cue_frames_use = cue_frames(cue_frames >= use_frames(1) & ...
+    cue_frames <= use_frames(end)) - use_frames(1) + 1;
+cue_frames_trace = zeros(length(use_frames),1);
+cue_frames_trace(cue_frames_use) = 1;
+
+
+figure; colormap(gray);
+
+subplot(3,1,1);
+imagesc(data(use_animal).im(use_day).roi_trace_df(curr_m,use_frames));
+caxis([0,5]);
+title('Movement-related ROIs');
+
+subplot(3,1,2);
+imagesc(data(use_animal).im(use_day).roi_trace_df(curr_q,use_frames));
+caxis([0,5]);
+title('Quiescent-related ROIs');
+
+subplot(3,1,3); hold on
+plot(cue_frames_trace,'b')
+plot((lever_position/max(lever_position))+2,'k')
+plot(move_frames+3,'m');
+plot(m_avg_act+4,'color',[0,0.7,0]);
+plot(q_avg_act+5,'color',[0.7,0,0]);
+xlim([0,length(use_frames)])
+legend({'Cue','Lever position','Movement', ...
+    'Movement-related ROI population average','Quiescent-related ROI population average'});
+
+
+%% 4B: average activity of all neurons aligned to movement onset/offset
+
+avg_act_onset_all = cell(length(data),1);
+avg_act_offset_all = cell(length(data),1);
+
+for curr_animal = 1:length(analysis)
+
+    for curr_day = 1:length(data(curr_animal).im)
+        
+        curr_act = permute(nanmean(analysis(curr_animal).im(curr_day).move_onset_aligned,1),[3 2 1]);                     
+        avg_act_onset_all{curr_animal}(curr_day,:) = nanmean(curr_act(:,:),1);
+        
+        curr_act = permute(nanmean(analysis(curr_animal).im(curr_day).move_offset_aligned,1),[3 2 1]);                       
+        avg_act_offset_all{curr_animal}(curr_day,:) = nanmean(curr_act(:,:),1);
+        
+    end
+
+end
+
+x = ((1:181) - 91)./28;
+
+figure;
+% All days: movement onset aligned
+subplot(1,2,1); hold on;
+plot(x,nanmean(vertcat(avg_act_onset_all{:})),'k');
+ylabel('Average \DeltaF/F');
+line([0,0],ylim,'color','k','linestyle','--');
+title('Movement onset (all ROIs, all animals, all days)');
+
+% All days: movement offset aligned
+subplot(1,2,2); hold on;
+plot(x,nanmean(vertcat(avg_act_offset_all{:})),'k');
+ylabel('Average \DeltaF/F');
+line([0,0],ylim,'color','k','linestyle','--');
+title('Movement offset (all ROIs, all animals, all days)');
+
+
+%% 4C: histogram of activity rate relative to movement/quiescence
+
+% Get fraction of activity during session and during movement
+activity_mq_rate_ratio = cell(length(data),1);
+activity_mq_rate_ratio_class = cell(length(data),1);
+
+for curr_animal = 1:length(data);
+    
+    n_days = length(data(curr_animal).im);
+    n_rois = size(data(curr_animal).im(1).roi_trace_thresh,1);
+    
+    activity_mq_rate_ratio{curr_animal} = cell(n_days,1);
+    activity_mq_rate_ratio_class{curr_animal} = cell(n_days,1);
+    
+    for curr_day = 1:length(data(curr_animal).im)
+        
+        if isempty(data(curr_animal).im(curr_day).roi_trace_df)
+            continue
+        end
+        
+        lever_active_frames = analysis(curr_animal).lever(curr_day).lever_move_frames;
+        
+        % Real data
+        curr_act = double(data(curr_animal).im(curr_day).roi_trace_thresh > 0);
+        
+        % Only use "active" ROIs, at least 5 events
+        min_events = 5;
+        active_rois = sum(diff(curr_act > 0,[],2) == 1,2) > min_events;
+        curr_act = curr_act(active_rois,:);
+        
+        % "Active" classified ROIs
+        curr_class = classified_rois(curr_animal).movement(active_rois,curr_day) | ...
+            classified_rois(curr_animal).quiescent(active_rois,curr_day);
+        
+        curr_act_m = (curr_act*lever_active_frames)./sum(lever_active_frames);
+        curr_act_q = (curr_act*~lever_active_frames)./sum(~lever_active_frames);
+        curr_act_mq = (curr_act_m - curr_act_q)./(curr_act_m + curr_act_q);
+        activity_mq_rate_ratio{curr_animal}{curr_day} = curr_act_mq;
+        
+        activity_mq_rate_ratio_class{curr_animal}{curr_day} = curr_act_mq(curr_class);      
+     
+    end
+    disp(curr_animal);
+end
+
+% Histogram of real vs. shuffled (all days/ROIs concatenated)
+activity_mq_ratio_cat = cell2mat((cellfun(@(x) vertcat(x{:}),activity_mq_rate_ratio,'uni',false)));
+activity_mq_ratio_class_cat = cell2mat((cellfun(@(x) vertcat(x{:}),activity_mq_rate_ratio_class,'uni',false)));
+
+bin_edges = linspace(-1,1,20);
+bin_centers = bin_edges(1:end-1) + diff(bin_edges)/2;
+
+real_dist = hist(activity_mq_ratio_cat,bin_centers);
+class_dist = hist(activity_mq_ratio_class_cat,bin_centers);
+
+figure; hold on;
+bar(bin_centers,real_dist,'w','linewidth',2);
+bar(bin_centers,class_dist,'k','linewidth',2)
+legend({'Real','Classified'})
+
+ylabel('Number of ROIs');
+xlabel('Rate M-Q/M+Q');
+
+
+
+
+%% 4D: average activity of M/Q ROIs aligned to movement onset/offset
+
+avg_act_onset_m = cell(8,1);
+avg_act_onset_q = cell(8,1);
+avg_act_offset_m = cell(8,1);
+avg_act_offset_q = cell(8,1);
+for curr_animal = 1:length(analysis)
+
+    for curr_day = 1:length(data(curr_animal).im)
+        
+        m_rois = classified_rois(curr_animal).movement(:,curr_day);
+        q_rois = classified_rois(curr_animal).quiescent(:,curr_day);
+        
+        curr_act = permute(nanmean(analysis(curr_animal).im(curr_day).move_onset_aligned,1),[3 2 1]);                     
+        avg_act_onset_m{curr_animal}(curr_day,:) = nanmean(curr_act(m_rois,:),1);
+        avg_act_onset_q{curr_animal}(curr_day,:) = nanmean(curr_act(q_rois,:),1);
+        
+        curr_act = permute(nanmean(analysis(curr_animal).im(curr_day).move_offset_aligned,1),[3 2 1]);                     
+        avg_act_offset_m{curr_animal}(curr_day,:) = nanmean(curr_act(m_rois,:),1);
+        avg_act_offset_q{curr_animal}(curr_day,:) = nanmean(curr_act(q_rois,:),1);   
+        
+    end
+
+end
+
+x = ((1:181) - 91)./28;
+
+figure;
+% All days: movement onset aligned
+subplot(1,2,1); hold on;
+plot(x,nanmean(vertcat(avg_act_onset_m{:})),'color',[0,0.8,0]);
+plot(x,nanmean(vertcat(avg_act_onset_q{:})),'color',[0.8,0,0]);
+ylabel('Average \DeltaF/F');
+legend({'M' 'Q'},'location','sw')
+line([0,0],ylim,'color','k','linestyle','--');
+title('Movement onset (all animals, all days)');
+
+% All days: movement offset aligned
+subplot(1,2,2); hold on;
+plot(x,nanmean(vertcat(avg_act_offset_m{:})),'color',[0,0.8,0]);
+plot(x,nanmean(vertcat(avg_act_offset_q{:})),'color',[0.8,0,0]);
+ylabel('Average \DeltaF/F');
+legend({'M' 'Q'},'location','sw')
+line([0,0],ylim,'color','k','linestyle','--');
+title('Movement offset (all animals, all days)');
+
+
+%% 5A: fraction of movement/quiescent ROIs
+
+m_frac = cellfun(@(x) nanmean(x,1),{classified_rois(:).movement}','uni',false);
+m_frac_pad = cell2mat(cellfun(@(x) padarray(x(1:min(14,length(x))), ...
+    [0,14-min(14,length(x))],NaN,'post'),m_frac,'uni',false));
+
+q_frac = cellfun(@(x) nanmean(x,1),{classified_rois(:).quiescent}','uni',false);
+q_frac_pad = cell2mat(cellfun(@(x) padarray(x(1:min(14,length(x))), ...
+    [0,14-min(14,length(x))],NaN,'post'),q_frac,'uni',false));
+
+figure; hold on
+errorbar(nanmean(m_frac_pad),nanstd(m_frac_pad)./sqrt(sum(~isnan(m_frac_pad))),'k','linewidth',2)
+errorbar(nanmean(q_frac_pad),nanstd(q_frac_pad)./sqrt(sum(~isnan(q_frac_pad))),'r','linewidth',2)
+ylabel('Fraction of ROIs');
+xlabel('Day');
+legend({'Movement-related' 'Quiescence-related'})
+
+% Statistics
+
+days_1 = 1:14;
+days_2 = 3:14;
+
+% Quiescent
+p = anova1(q_frac_pad,[],'off');
+
+[r,p] = corrcoef(reshape(repmat(days_1,length(data),1),[],1), ...
+    reshape(q_frac_pad(:,days_1),[],1));
+
+[r,p] = corrcoef(reshape(repmat(days_2,length(data),1),[],1), ...
+    reshape(q_frac_pad(:,days_2),[],1));
+
+% Movement
+p = anova1(m_frac_pad,[],'off');
+
+[r,p] = corrcoef(reshape(repmat(days_1,length(data),1),[],1), ...
+    reshape(m_frac_pad(:,days_1),[],1));
+
+[r,p] = corrcoef(reshape(repmat(days_2,length(data),1),[],1), ...
+    reshape(m_frac_pad(:,days_2),[],1));
+
+
+
+%% 5E: rate of M/Q ROIs during movement/quiescence
+
+act_all_rate_q = cell(length(data),1);
+act_q_rate_q = cell(length(data),1);
+act_m_rate_q = cell(length(data),1);
+act_q_rate_m = cell(length(data),1);
+act_m_rate_m = cell(length(data),1);
+
+for curr_animal = 1:length(data)   
+    for curr_day = 1:length(data(curr_animal).im);
+        
+        if isempty(data(curr_animal).im(curr_day).roi_trace_df)
+            continue
+        end
+        
+        % Get  activity
+        curr_q = logical(classified_rois(curr_animal).quiescent(:,curr_day));
+        curr_m = logical(classified_rois(curr_animal).movement(:,curr_day));
+        curr_act = double(data(curr_animal).im(curr_day).roi_trace_thresh(:,:) > 0);
+        
+        % Get lever movement
+        lever_active_frames = analysis(curr_animal).lever(curr_day).lever_move_frames;
+        
+        % Split lever
+        boundary_times = find(diff([Inf;lever_active_frames;Inf]) ~= 0);       
+        lever_active_split = mat2cell(lever_active_frames,diff(boundary_times));
+                
+        lever_split_m = cellfun(@(x) any(x),lever_active_split);
+        lever_split_q = cellfun(@(x) ~any(x),lever_active_split);
+                
+        split_act = mat2cell(curr_act, ...
+            size(curr_act,1),diff(boundary_times));
+        
+        split_act_q = cell2mat(split_act(lever_split_q));        
+        split_act_m = cell2mat(split_act(lever_split_m));
+        
+        act_all_rate_q{curr_animal}(curr_day) = nanmean(nanmean(split_act_q(:,:)));
+        act_q_rate_q{curr_animal}(curr_day) = nanmean(nanmean(split_act_q(curr_q,:)));
+        act_m_rate_q{curr_animal}(curr_day) = nanmean(nanmean(split_act_m(curr_q,:)));
+        
+        act_q_rate_m{curr_animal}(curr_day) = nanmean(nanmean(split_act_q(curr_m,:)));
+        act_m_rate_m{curr_animal}(curr_day) = nanmean(nanmean(split_act_m(curr_m,:)));
+        
+    end
+    disp(curr_animal);
+end
+
+act_all_rate_q_cat = vertcat(act_all_rate_q{:});
+act_q_rate_q_cat = vertcat(act_q_rate_q{:});
+act_m_rate_q_cat = vertcat(act_m_rate_q{:});
+
+act_q_rate_m_cat = vertcat(act_q_rate_m{:});
+act_m_rate_m_cat = vertcat(act_m_rate_m{:});
+
+figure; hold on;
+errorbar(nanmean(act_q_rate_q_cat),nanstd(act_q_rate_q_cat)./ ...
+    sqrt(sum(~isnan(act_q_rate_q_cat))),'color',[0.7,0,0],'linewidth',2)
+errorbar(nanmean(act_m_rate_m_cat),nanstd(act_m_rate_m_cat)./ ...
+    sqrt(sum(~isnan(act_m_rate_m_cat))),'color',[0,0.7,0],'linewidth',2)
+
+errorbar(nanmean(act_m_rate_q_cat),nanstd(act_m_rate_q_cat)./ ...
+    sqrt(sum(~isnan(act_m_rate_q_cat))),'color',[0.7,0,0],'linewidth',2,'linestyle','--')
+errorbar(nanmean(act_q_rate_m_cat),nanstd(act_q_rate_m_cat)./ ...
+    sqrt(sum(~isnan(act_q_rate_m_cat))),'color',[0,0.7,0],'linewidth',2,'linestyle','--')
+
+legend({'Q during Q','M during M','Q during M','M during Q'});
+
+xlabel('Day');
+ylabel('Rate of activity during preferred behavior');
+
+figure; hold on;
+errorbar(nanmean(act_all_rate_q_cat),nanstd(act_all_rate_q_cat)./ ...
+    sqrt(sum(~isnan(act_all_rate_q_cat))),'color',[0.7,0,0],'linewidth',2)
+title('Rate of all ROIs during quiescence');
+
+%% 5F: same classification overlap
+
+% Same classification overlap
+m = {classified_rois(:).movement};
+q = {classified_rois(:).quiescent};
+
+m2m = cellfun(@(m) (+m'*+m)./(repmat(sum(m,1)',1,size(m,2)) + repmat(sum(m,1),size(m,2),1)),m,'uni',false);
+m2m_pad = cellfun(@(x) padarray(x(1:min(length(x),14),1:min(length(x),14)), ...
+    [max(14-length(x),0),max(14-length(x),0)],NaN,'post'),m2m,'uni',false);
+m2m_cat = cat(3,m2m_pad{:});
+
+q2q = cellfun(@(q) (+q'*+q)./(repmat(sum(q,1)',1,size(q,2)) + repmat(sum(q,1),size(q,2),1)),q,'uni',false);
+q2q_pad = cellfun(@(x) padarray(x(1:min(length(x),14),1:min(length(x),14)), ...
+    [max(14-length(x),0),max(14-length(x),0)],NaN,'post'),q2q,'uni',false);
+q2q_cat = cat(3,q2q_pad{:});
+
+% Same classification overlap shuffle
+n_rep = 1000;
+
+m2m_cat_shuff = nan(14,14,length(data),n_rep);
+q2q_cat_shuff = nan(14,14,length(data),n_rep);
+
+m_use = cellfun(@(x) x(any(x,2),:),m,'uni',false);
+q_use = cellfun(@(x) x(any(x,2),:),q,'uni',false);
+
+for i = 1:n_rep
+    m_shuff = cellfun(@(x) shake(x,1),m_use,'uni',false);    
+    m2m_shuff = cellfun(@(m) (+m'*+m)./(repmat(sum(m,1)',1,size(m,2)) + ...
+        repmat(sum(m,1),size(m,2),1)),m_shuff,'uni',false);  
+    m2m_shuff_pad = cellfun(@(x) padarray(x(1:min(length(x),14),1:min(length(x),14)), ...
+    [max(14-length(x),0),max(14-length(x),0)],NaN,'post'),m2m_shuff,'uni',false);
+    m2m_cat_shuff(:,:,:,i) = cat(3,m2m_shuff_pad{:});
+    
+    q_shuff = cellfun(@(x) shake(x,1),q_use,'uni',false);    
+    q2q_shuff = cellfun(@(q) (+q'*+q)./(repmat(sum(q,1)',1,size(q,2)) + ...
+        repmat(sum(q,1),size(q,2),1)),q_shuff,'uni',false);   
+    q2q_shuff_pad = cellfun(@(x) padarray(x(1:min(length(x),14),1:min(length(x),14)), ...
+    [max(14-length(x),0),max(14-length(x),0)],NaN,'post'),q2q_shuff,'uni',false);
+    q2q_cat_shuff(:,:,:,i) = cat(3,q2q_shuff_pad{:});
+ 
+    disp(i);
+end
+
+% Real relative to shuffle (in stds from mean)
+m2m_cat_shuff_mean = nanmean(m2m_cat_shuff,4);
+m2m_cat_shuff_std = nanstd(m2m_cat_shuff,[],4);
+m2m_cat_stds = (m2m_cat-m2m_cat_shuff_mean)./m2m_cat_shuff_std;
+
+q2q_cat_shuff_mean = nanmean(q2q_cat_shuff,4);
+q2q_cat_shuff_std = nanstd(q2q_cat_shuff,[],4);
+q2q_cat_stds = (q2q_cat-q2q_cat_shuff_mean)./q2q_cat_shuff_std;
+
+% Average triangular values in first and second week
+m2m_tril = cell2mat(arrayfun(@(x) [nanmean(AP_itril(m2m_cat_stds(1:7,1:7,x),-1)), ...
+    nanmean(AP_itril(m2m_cat_stds(8:end,8:end,x),-1))], ...
+    transpose(1:size(m2m_cat_stds,3)),'uni',false));
+
+q2q_tril = cell2mat(arrayfun(@(x) [nanmean(AP_itril(q2q_cat_stds(1:7,1:7,x),-1)), ...
+    nanmean(AP_itril(q2q_cat_stds(8:end,8:end,x),-1))], ...
+    transpose(1:size(q2q_cat_stds,3)),'uni',false));
+
+% Plot the grid
+figure; 
+subplot(1,3,1);
+imagesc(nanmean(m2m_cat_stds,3));
+axis square;
+caxis([0 5]);
+c = colorbar;
+ylabel(c,'Z-score');
+title('M2M');
+
+subplot(1,3,2);
+imagesc(nanmean(q2q_cat_stds,3));
+axis square;
+caxis([0 5]);
+c = colorbar;
+ylabel(c,'Z-score');
+title('Q2Q');
+
+% Plot the difference between wk1 and wk2 triangular pieces
+m2m_plot_mean = nanmean(m2m_tril);
+m2m_plot_sem = nanstd(m2m_tril)./sqrt(sum(~isnan(m2m_tril)));
+
+q2q_plot_mean = nanmean(q2q_tril);
+q2q_plot_sem = nanstd(q2q_tril)./sqrt(sum(~isnan(q2q_tril)));
+
+subplot(1,3,3); hold on;
+bar([m2m_plot_mean;q2q_plot_mean],'linewidth',2); colormap(gray)
+errorb([m2m_plot_mean;q2q_plot_mean],[m2m_plot_sem;q2q_plot_sem],'linewidth',2);
+
+set(gca,'XTick',1:2);
+set(gca,'XTickLabel',{'M2M','Q2Q'});
+legend({'Week 1','Week 2'});
+ylabel('Z-score')
+
+% Stats
+p_m2m = signrank(m2m_tril(:,1),m2m_tril(:,2));
+p_q2q = signrank(q2q_tril(:,1),q2q_tril(:,2));
+
+
+%% 5G: classification switching
+
+m = {classified_rois(:).movement};
+q = {classified_rois(:).quiescent};
+
+m_pad = cellfun(@(x) padarray(+x(:,1:min(size(x,2),14)),[0,max(14-size(x,2),0)],NaN,'post'),m,'uni',false);
+q_pad = cellfun(@(x) padarray(+x(:,1:min(size(x,2),14)),[0,max(14-size(x,2),0)],NaN,'post'),q,'uni',false);
+
+% Grid of overlap
+m2q = cellfun(@(m,q) (+m'*+q)./(repmat(sum(m,1)',1,size(m,2)) + ...
+    repmat(sum(q,1),size(q,2),1)),m_pad,q_pad,'uni',false);
+m2q_cat = cat(3,m2q{:});
+
+% Week 1 vs. week 2 classification switch
+min_classdays = 1;
+m2q = cellfun(@(m,q) ...
+    sum((sum(m(:,1:7),2) >= min_classdays) & ...
+    (sum(q(:,8:end),2) >= min_classdays))./ ...
+    sum((sum(m(:,1:7),2) >= min_classdays)),m_pad,q_pad,'uni',false);
+q2m = cellfun(@(m,q) ...
+    sum((sum(q(:,1:7),2) >= min_classdays) & ...
+    (sum(m(:,8:end),2) >= min_classdays))./ ...
+    sum((sum(q(:,1:7),2) >= min_classdays)),m_pad,q_pad,'uni',false);
+
+m2q_mean = cellfun(@nanmean,m2q);
+q2m_mean = cellfun(@nanmean,q2m);
+
+figure; 
+% Plot overlap grid
+subplot(1,2,1);
+imagesc(nanmean(m2q_cat,3));colormap(gray);
+xlabel('Quiescent');
+ylabel('Movement');
+c = colorbar;
+ylabel(c,'Fraction of overlapping ROIs')
+axis square;
+
+% Plot fraction of ROIs classified in week 1 that switched week 2
+subplot(1,2,2);hold on;
+bar([nanmean(m2q_mean) nanmean(q2m_mean)],'FaceColor','w','linewidth',2);
+errorbar([nanmean(m2q_mean) nanmean(q2m_mean)], ...
+    [nanstd(m2q_mean)./sqrt(sum(~isnan(m2q_mean))), ...
+    nanstd(q2m_mean)./sqrt(sum(~isnan(q2m_mean)))],'.k','linewidth',2);
+ylabel('Fraction of ROIs')
+set(gca,'XTick',1:2);
+set(gca,'XTickLabel',{'M2Q','Q2M'});
+xlim([0,3]);
+
+
+%% UNCLASSIFIED: example aligned activity (pair with images from dendrite compare)
+
+% Example M2Q
+animal = 3;
+roi = 236;
+
+n_days = length(analysis(3).im);
+surrounding_frames = analysis(animal).surrounding_frames;
+zero_frame = find(surrounding_frames == 0);
+curr_onset_act = ...
+    arrayfun(@(x) analysis(3).im(x).move_onset_aligned(:,:,roi),1:n_days,'uni',false);
+curr_offset_act = ...
+    arrayfun(@(x) analysis(3).im(x).move_offset_aligned(:,:,roi),1:n_days,'uni',false);
+
+figure; 
+for i = 1:n_days
+   subplot(2,n_days,i);
+   imagesc(curr_onset_act{i});
+   title(['On D' num2str(2)]);
+   line([zero_frame,zero_frame],ylim,'color','w');
+   
+   subplot(2,n_days,n_days+i); 
+   imagesc(curr_offset_act{i});
+   title(['Off D' num2str(2)]);
+   line([zero_frame,zero_frame],ylim,'color','w');
+end
+colormap(hot)
+set(gcf,'Name',['Animal ' num2str(animal) ', ROIs ' num2str(data(animal).roi_group{roi})]);
+
+% Example M2Q
+animal = 3;
+roi = 62;
+
+n_days = length(analysis(3).im);
+surrounding_frames = analysis(animal).surrounding_frames;
+zero_frame = find(surrounding_frames == 0);
+curr_onset_act = ...
+    arrayfun(@(x) analysis(3).im(x).move_onset_aligned(:,:,roi),1:n_days,'uni',false);
+curr_offset_act = ...
+    arrayfun(@(x) analysis(3).im(x).move_offset_aligned(:,:,roi),1:n_days,'uni',false);
+
+figure; 
+for i = 1:n_days
+   subplot(2,n_days,i);
+   imagesc(curr_onset_act{i});
+   title(['On D' num2str(2)]);
+   line([zero_frame,zero_frame],ylim,'color','w');
+   
+   subplot(2,n_days,n_days+i); 
+   imagesc(curr_offset_act{i});
+   title(['Off D' num2str(2)]);
+   line([zero_frame,zero_frame],ylim,'color','w');
+end
+colormap(hot)
+set(gcf,'Name',['Animal ' num2str(animal) ', ROIs ' num2str(data(animal).roi_group{roi}')]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

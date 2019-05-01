@@ -1,0 +1,17 @@
+%% Perform analysis for LeverWater
+
+AP_getLeftLeverTimes;
+
+%% plot percent press v trial
+
+figure
+subplot(2,1,1)
+plot(left_down,[1:length(left_down)]./length(left_down),'k.');
+title('Lever depression timing')
+xlabel('Time (s)')
+ylabel('Normalized lever press')
+subplot(2,1,2)
+left_down_diff = diff(left_down);
+plot([1:length(left_down_diff)]./length(left_down_diff),left_down_diff,'k.')
+xlabel('Normalized lever press')
+ylabel('Time between lever depressions (s)')

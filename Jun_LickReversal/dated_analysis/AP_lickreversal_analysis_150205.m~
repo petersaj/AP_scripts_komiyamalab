@@ -1,0 +1,1064 @@
+%% GENERAL USE: Get activity by epoch (following cells use this)
+
+similarity = 'pca'; % 'correlation', 'pca'
+trial_time = [0 2]; % min/max trial time to look at, seconds from odor onset
+sig_cells_only = false; % force nonsignificant cells to have value of 0
+
+% Get animal group indicies
+rev_animals = cellfun(@(x) strcmp(x,'y'),{mice.switch});
+ctrl_animals = cellfun(@(x) strcmp(x,'n'),{mice.switch});
+pmm_animals = cellfun(@(x) strcmp(x,'PMM'),{mice.location});
+alm_animals = cellfun(@(x) strcmp(x,'ALM'),{mice.location});
+
+
+% Identify significantly active cells from baseline if selected
+if sig_cells_only
+    % Go through each epoch, compare to baseline (significant & above)
+    trial_epochs = 4;
+    baseline_multiepoch_sigdiff = cell(length(animals),1);
+    for curr_animal = 1:length(animals)
+        for curr_session = 1:length(analysis.epoch_activity_CL{curr_animal});
+            for curr_reversal = 1:length(analysis.epoch_activity_CL{curr_animal}{curr_session})
+                for curr_epoch = 1:trial_epochs;
+                    
+                    frames = analysis.epoch_frames{curr_animal}{curr_session};
+                    curr_epoch_frames = frames(1):frames(2) > (curr_epoch-1)*frames(2)/trial_epochs & ...
+                        frames(1):frames(2) < curr_epoch*frames(2)/trial_epochs;
+                    
+                    baseline_frames = frames(1):frames(2) < 0;
+                    
+                    curr_activity = analysis.epoch_activity_CL{curr_animal}{curr_session}{curr_reversal};
+                    
+                    baseline_multiepoch_sigdiff{curr_animal}{curr_session}{curr_reversal}{curr_epoch} = ...
+                        AP_signrank_matrix( ...
+                        permute(nanmean(curr_activity(:,baseline_frames,:),2),[1 3 2]), ...
+                        permute(nanmean(curr_activity(:,curr_epoch_frames,:),2),[1 3 2])) ...
+                        < 0.01 & ...
+                        nanmean(permute(nanmean(curr_activity(:,frames(1):frames(2) < 0,:),2),[1 3 2]),1) < ...
+                        nanmean(permute(nanmean(curr_activity(:,curr_epoch_frames,:),2),[1 3 2]),1);
+                    
+                end
+            end
+        end
+        disp(curr_animal);
+    end
+end
+ 
+
+all_active_trials = cell(length(animals),1);
+all_contingencies = cell(length(animals),1);
+all_latereversal = cell(length(animals),1);
+all_sessions = cell(length(animals),1);
+
+% Get activity
+for curr_animal = 1:length(mice)
+        
+    curr_slot = 1;
+    for curr_session = 1:length(data_all(curr_animal).im);
+        
+        % define reversal (use only the first so that it's settled in)
+        for curr_rev = 1:length(analysis.epoch_contingencies{curr_animal}{curr_session});
+            
+            revs = [1;find(diff(analysis.odor_trials{curr_animal}{curr_session}(:,2)))+1;...
+                size(analysis.odor_trials{curr_animal}{curr_session},1)];
+            % if there are < 10 trials in reversal, assume early/not real
+            % reversal and use the next one
+            rev_trials = diff(revs);
+            if rev_trials(curr_rev) < 10
+                curr_rev = curr_rev + 1;
+            end
+            
+            % use time in the trial defined by user
+            use_frames = data_all(curr_animal).im(curr_session).framerate*trial_time;
+            curr_frames = analysis.epoch_frames{curr_animal}{curr_session}(1) : ...
+                analysis.epoch_frames{curr_animal}{curr_session}(2);
+            curr_odor_frames = curr_frames > use_frames(1) & curr_frames <= use_frames(2);
+            
+            curr_act = analysis.epoch_activity_CL{curr_animal}{curr_session}{curr_rev} ...
+                (:,curr_odor_frames,:);
+            % skip this if less than 20 trials
+            if size(curr_act,1) < 20
+                continue
+            end
+            
+            curr_active_trials = permute(nanmean(any(curr_act,2),1),[3 1 2]);
+            % if selected, force cells not significantly active during
+            % selected trial time to be 0
+            if sig_cells_only 
+                trial_epochs_ends = linspace(0,4,trial_epochs+1); % the ends of the epochs (sec)
+                trial_epochs_use = trial_epochs_ends(2:end) > floor(trial_time(1)) & ...
+                    trial_epochs_ends(2:end) <= ceil(trial_time(2));
+                
+                curr_sigcells = ...
+                    any(vertcat(baseline_multiepoch_sigdiff{curr_animal} ...
+                    {curr_session}{curr_rev}{trial_epochs_use}),1)';                              
+                
+                curr_active_trials(~curr_sigcells) = 0;
+            end
+            
+            curr_contingency = analysis.epoch_contingencies{curr_animal}{curr_session}(curr_rev);           
+            % if control animal, don't use anything past session 10 or if
+            % contingency 2 has appeared (because reversal in these
+            % animals, but it's late - I'm not using this data for now)
+            if ismember(curr_animal,find(ctrl_animals));
+                if curr_session > 10 || curr_contingency == 2
+                    continue
+                end
+            end
+            
+            all_active_trials{curr_animal,curr_slot} = curr_active_trials;
+            all_contingencies{curr_animal}(curr_slot) = curr_contingency;
+            all_sessions{curr_animal}(curr_slot) = curr_session;
+            
+            % 'Late' for reversal animals = anything including and after
+            % the second reversal
+            if ismember(curr_animal,find(rev_animals));
+                all_latereversal{curr_animal}(curr_slot) = ...
+                    sum(diff(all_contingencies{curr_animal}) ~= 0) > 1;
+            else
+                % 'Late for control animals = anything after the 6th session
+                all_latereversal{curr_animal}(curr_slot) = ...
+                    curr_session >= 6;
+            end
+            curr_slot = curr_slot + 1;
+            
+        end
+    end
+end
+
+
+
+
+%% Slide 1-2) similarity between contingency epochs
+% generalized for these features:
+% - measurement of similarity
+% - time used to gauge active on trial
+% - activity on trial threshold or compared to baseline
+
+% If similarity measure is PC distance, get number of PCs to use
+if strcmp(similarity,'pca')
+    pc_var = cell(length(mice),1);
+    for curr_animal = 1:length(mice);
+        
+        curr_act = horzcat(all_active_trials{curr_animal,:});
+        [coeff score latent] = princomp(curr_act');
+        pc_var{curr_animal} = cumsum(latent)/sum(latent);
+    end
+    % use the median number of PCs that give > 80% variance
+    pcs = ceil(median(cellfun(@(x) find(x > 0.8,1),pc_var)));
+    disp(['PCs used: ' num2str(pcs)]);
+end
+
+
+% Distance of the first n PCs WITHIN EARLY/LATE
+activity_distance = cell(length(mice),1);
+for curr_animal = 1:length(mice);
+    
+    curr_act = horzcat(all_active_trials{curr_animal,:});
+    
+    switch similarity       
+        case 'pca'
+            % euclidean distance between selected PCs
+            [coeff score latent] = princomp(curr_act');
+            pc_dist = pdist2(score(:,1:pcs),score(:,1:pcs));
+            pc_dist_norm = (pc_dist-nanmean(AP_itril(pc_dist,-1)))./nanstd(AP_itril(pc_dist,-1));
+            use_similarity = -pc_dist_norm;
+            
+        case 'correlation'
+            % Pearson's correlation
+            activity_corr = corrcoef(curr_act);
+            use_similarity = activity_corr;
+    end
+    
+    
+    cont1_session = all_contingencies{curr_animal} == 1;
+    cont2_session = all_contingencies{curr_animal} == 2;
+    
+    
+    % split/save distances, dim1 = animal, dim2 = early/late, 
+    % dim3 = 1v1 / 2v2 / 1v2
+    
+    activity_distance{curr_animal,1,1} = ...
+        AP_itril(use_similarity(~all_latereversal{curr_animal,:} & cont1_session, ...
+        ~all_latereversal{curr_animal,:} & cont1_session),-1);
+    
+    activity_distance{curr_animal,2,1} = ...
+        AP_itril(use_similarity(all_latereversal{curr_animal,:} & cont1_session, ...
+        all_latereversal{curr_animal,:} & cont1_session),-1);
+    
+    activity_distance{curr_animal,1,2} = ...
+        AP_itril(use_similarity(~all_latereversal{curr_animal,:} & cont2_session, ...
+        ~all_latereversal{curr_animal,:} & cont2_session),-1);
+    
+    activity_distance{curr_animal,2,2} = ...
+        AP_itril(use_similarity(all_latereversal{curr_animal,:} & cont2_session, ...
+        all_latereversal{curr_animal,:} & cont2_session),-1);
+    
+    activity_distance{curr_animal,1,3} = ...
+        reshape(use_similarity(~all_latereversal{curr_animal,:} & cont1_session, ...
+        ~all_latereversal{curr_animal,:} & cont2_session),[],1);
+    
+    activity_distance{curr_animal,2,3} = ...
+        reshape(use_similarity(all_latereversal{curr_animal,:} & cont1_session, ...
+        all_latereversal{curr_animal,:} & cont2_session),[],1);
+    
+end
+
+activity_distance_mean_withinrev = cellfun(@nanmean,activity_distance);
+
+
+% Distance of the first n PCs ACROSS EARLY/LATE
+activity_distance = cell(length(mice),1);
+for curr_animal = 1:length(mice);
+        
+    curr_act = horzcat(all_active_trials{curr_animal,:});
+    
+    switch similarity       
+        case 'pca'
+            % euclidean distance between selected PCs
+            [coeff score latent] = princomp(curr_act');
+            pc_dist = pdist2(score(:,1:pcs),score(:,1:pcs));
+            pc_dist_norm = (pc_dist-nanmean(AP_itril(pc_dist,-1)))./nanstd(AP_itril(pc_dist,-1));
+            use_similarity = -pc_dist_norm;
+            
+        case 'correlation'
+            % Pearson's correlation
+            activity_corr = corrcoef(curr_act);
+            use_similarity = activity_corr;
+    end
+    
+    cont1_session = all_contingencies{curr_animal} == 1;
+    cont2_session = all_contingencies{curr_animal} == 2;
+    
+    
+    % split/save distances, dim1 = animal, 
+    % dim2 = 1v1 / 2v2 / 1v2 / 2v1 (former = early, latter = late)
+      
+    activity_distance{curr_animal,1} = ...
+        reshape(use_similarity(all_latereversal{curr_animal,:} & cont1_session, ...
+        ~all_latereversal{curr_animal,:} & cont1_session),[],1);
+    
+    activity_distance{curr_animal,2} = ...
+        reshape(use_similarity(all_latereversal{curr_animal,:} & cont2_session, ...
+        ~all_latereversal{curr_animal,:} & cont2_session),[],1);
+    
+    activity_distance{curr_animal,3} = ...
+        reshape(use_similarity(all_latereversal{curr_animal,:} & cont1_session, ...
+        ~all_latereversal{curr_animal,:} & cont2_session),[],1);
+    
+    activity_distance{curr_animal,4} = ...
+        reshape(use_similarity(all_latereversal{curr_animal,:} & cont2_session, ...
+        ~all_latereversal{curr_animal,:} & cont1_session),[],1);
+    
+end
+
+activity_distance_mean_acrossrev = cellfun(@nanmean,activity_distance);
+
+
+% Plot by contingency and area 
+alm_distance_withinrev = activity_distance_mean_withinrev(alm_animals & rev_animals,:,:);
+alm_distance_acrossrev = activity_distance_mean_acrossrev(alm_animals & rev_animals,:,:);
+
+alm_distance_withinrev_reshape = permute(alm_distance_withinrev,[2 1 3]);
+alm_distance_acrossrev_reshape = cat(1,permute(alm_distance_acrossrev(:,1:3),[3 1 2]), ...
+    cat(3,zeros(1,size(alm_distance_acrossrev,1),2),permute(alm_distance_acrossrev(:,4),[3 1 2])));
+
+alm_distance_boxplot = cat(1,alm_distance_withinrev_reshape,alm_distance_acrossrev_reshape);
+
+
+pmm_distance_withinrev = activity_distance_mean_withinrev(pmm_animals & rev_animals,:,:);
+pmm_distance_acrossrev = activity_distance_mean_acrossrev(pmm_animals & rev_animals,:,:);
+
+pmm_distance_withinrev_reshape = permute(pmm_distance_withinrev,[2 1 3]);
+pmm_distance_acrossrev_reshape = cat(1,permute(pmm_distance_acrossrev(:,1:3),[3 1 2]), ...
+    cat(3,zeros(1,size(pmm_distance_acrossrev,1),2),permute(pmm_distance_acrossrev(:,4),[3 1 2])));
+
+pmm_distance_boxplot = cat(1,pmm_distance_withinrev_reshape,pmm_distance_acrossrev_reshape);
+
+figure;
+p1 = subplot(2,5,1:4);
+aboxplot(alm_distance_boxplot,'colorgrad','green_down')
+ylabel('Similarity')
+set(gca,'XTickLabel',{'1 v 1' '2 v 2' '1 v 2'})
+legend({'Within early' 'Within late' 'Across early 1/late 2' 'Across early 2/late 1'});
+title('ALM')
+
+p2 = subplot(2,5,6:9);
+aboxplot(pmm_distance_boxplot,'colorgrad','green_down')
+ylabel('Similarity')
+set(gca,'XTickLabel',{'1 v 1' '2 v 2' '1 v 2'})
+legend({'Within early' 'Within late' 'Across early 1/late 2' 'Across early 2/late 1'});
+title('PMM')
+
+% Plot control as early v late contingency 1
+alm_distance_withinrev_ctrl = activity_distance_mean_withinrev(alm_animals & ctrl_animals,:,1);
+alm_distance_acrossrev_ctrl = activity_distance_mean_acrossrev(alm_animals & ctrl_animals,1);
+alm_distance_ctrl_boxplot = [alm_distance_withinrev_ctrl alm_distance_acrossrev_ctrl];
+
+pmm_distance_withinrev_ctrl = activity_distance_mean_withinrev(pmm_animals & ctrl_animals,:,1);
+pmm_distance_acrossrev_ctrl = activity_distance_mean_acrossrev(pmm_animals & ctrl_animals,1);
+pmm_distance_ctrl_boxplot = [pmm_distance_withinrev_ctrl pmm_distance_acrossrev_ctrl];
+
+subplot(2,5,5); hold on;
+aboxplot(alm_distance_ctrl_boxplot,'colorgrad','green_down');
+set(gca,'XTick',1:3);
+set(gca,'XTickLabel',{'Early' 'Late' 'Across'});
+ylim(get(p1,'ylim'));
+title('ALM control');
+
+subplot(2,5,10); hold on;
+aboxplot(pmm_distance_ctrl_boxplot,'colorgrad','green_down');
+set(gca,'XTick',1:3);
+set(gca,'XTickLabel',{'Early' 'Late' 'Across'});
+ylim(get(p1,'ylim'));
+title('PMM control');
+
+set(gcf,'Name',['User settings: similarity=' similarity ...
+    ', trial time=[' num2str(trial_time) '], sig cells = ' num2str(+sig_cells_only)]);
+
+
+
+%% Get the mean activity in different conditions
+
+% at the moment requires the last cell be run to avoid copy/paste mess
+
+mean_activity = {};
+for curr_animal = 1:length(mice);
+        
+    curr_act = horzcat(all_active_trials{curr_animal,:});
+    
+    cont1_session = all_contingencies{curr_animal} == 1;
+    cont2_session = all_contingencies{curr_animal} == 2;
+    
+    
+    % split/save distances, dim1 = animal, 
+    % dim2 = contingency (1/2) % dim3 = early/late
+      
+    mean_activity{curr_animal,1,1} = ...
+        nanmean(curr_act(:,~all_latereversal{curr_animal,:} & cont1_session));
+    mean_activity{curr_animal,2,1} = ...
+        nanmean(curr_act(:,~all_latereversal{curr_animal,:} & cont2_session));
+    mean_activity{curr_animal,1,2} = ...
+        nanmean(curr_act(:,all_latereversal{curr_animal,:} & cont1_session));
+    mean_activity{curr_animal,2,2} = ...
+        nanmean(curr_act(:,all_latereversal{curr_animal,:} & cont2_session));
+    
+end
+mean_activity_grouped = cellfun(@nanmedian,mean_activity);
+
+
+alm_rev_meanact = mean_activity_grouped(alm_animals & rev_animals,:,:);
+pmm_rev_meanact = mean_activity_grouped(pmm_animals & rev_animals,:,:);
+
+figure;aboxplot(permute(alm_rev_meanact,[2 1 3]))
+title('ALM');
+set(gca,'XTickLabel',{'Early' 'Late'});
+ylabel('Mean reliability')
+legend({'Cont 1' 'Cont 2'});
+
+figure;aboxplot(permute(pmm_rev_meanact,[2 1 3]))
+title('PMM')
+set(gca,'XTickLabel',{'Early' 'Late'});
+ylabel('Mean reliability')
+legend({'Cont 1' 'Cont 2'});
+
+
+
+%% Slide 3) Similarity of activity by time (sessions)
+
+% If similarity measure is PC distance, get number of PCs to use
+if strcmp(similarity,'pca')
+    pc_var = cell(length(mice),1);
+    for curr_animal = 1:length(mice);
+        
+        curr_act = horzcat(all_active_trials{curr_animal,:});
+        [coeff score latent] = princomp(curr_act');
+        pc_var{curr_animal} = cumsum(latent)/sum(latent);
+    end
+    % use the median number of PCs that give > 80% variance
+    pcs = ceil(median(cellfun(@(x) find(x > 0.8,1),pc_var)));
+    disp(['PCs used: ' num2str(pcs)]);
+end
+
+% Distance by session / contingency / time
+max_sessions = max(cellfun(@length,analysis.epoch_activity_CL))+1;
+max_rev = max(cellfun(@(x) sum(diff(x) ~= 0),all_contingencies))+1;
+rev_grp_all = nan(length(mice),max_sessions,max_rev);
+for curr_animal = 1:length(mice);
+    
+    curr_act = horzcat(all_active_trials{curr_animal,:});
+    
+    switch similarity       
+        case 'pca'
+            % euclidean distance between selected PCs
+            [coeff score latent] = princomp(curr_act');
+            pc_dist = pdist2(score(:,1:pcs),score(:,1:pcs));
+            pc_dist_norm = (pc_dist-nanmean(AP_itril(pc_dist,-1)))./nanstd(AP_itril(pc_dist,-1));
+            use_similarity = -pc_dist_norm;
+            
+        case 'correlation'
+            % Pearson's correlation
+            activity_corr = corrcoef(curr_act);
+            use_similarity = activity_corr;
+    end
+    
+    
+    cont1_session = all_contingencies{curr_animal} == 1;
+    cont2_session = all_contingencies{curr_animal} == 2;
+    
+    % Get dfference between variables
+    time_difference = pdist2(all_sessions{curr_animal}',all_sessions{curr_animal}');
+    n_reversals = cumsum(abs([0 diff(all_contingencies{curr_animal})]));
+    reversal_difference = pdist2(n_reversals',n_reversals');
+    contingency_difference = pdist2(all_contingencies{curr_animal}',all_contingencies{curr_animal}');
+    earlylate_difference = pdist2(all_latereversal{curr_animal}',all_latereversal{curr_animal}');
+
+    
+    time_aoc = AP_itril(time_difference,-1);
+    similarity_aoc = AP_itril(use_similarity,-1);
+    contingency_aoc = AP_itril(contingency_difference,-1);
+    reversal_aoc = AP_itril(reversal_difference,-1);
+    earlylate_aoc = AP_itril(earlylate_difference,-1);
+    
+    % for ancova
+    % aoctool(time_aoc,similarity_aoc,reversal_aoc)
+    
+    % group by reversal distance
+    for curr_rev_dist = unique(reversal_aoc)';
+        curr_rev_grp = reversal_aoc == curr_rev_dist;
+        rev_grp_mean_similarity = grpstats(similarity_aoc(curr_rev_grp),time_aoc(curr_rev_grp));
+        rev_grp_all(curr_animal,1+unique(time_aoc(curr_rev_grp)),curr_rev_dist+1) = ...
+            rev_grp_mean_similarity;    
+    end
+
+end
+
+
+figure; 
+
+rev_grp_alm = permute(nanmean(rev_grp_all(rev_animals & alm_animals,:,:)),[2 3 1]);
+subplot(2,1,1); hold on;
+n_plot = find(any(~isnan(rev_grp_alm),2),1,'last');
+col = jet(n_plot);
+for i = 1:n_plot
+   plot(rev_grp_alm(i,:),'color',col(i,:)); 
+end
+title('ALM (color = \DeltaReversal)');
+xlabel('Session difference')
+ylabel('Similarity')
+
+rev_grp_pmm = permute(nanmean(rev_grp_all(rev_animals & pmm_animals,:,:)),[2 3 1]);
+subplot(2,1,2); hold on;
+n_plot = find(any(~isnan(rev_grp_pmm),2),1,'last');
+col = jet(n_plot);
+for i = 1:n_plot
+   plot(rev_grp_pmm(i,:),'color',col(i,:)); 
+end
+title('PMM (color = \DeltaReversal)');
+xlabel('Session difference')
+ylabel('Similarity')
+
+
+%% GENERAL USE: Get d' (based on all sessions)
+
+% define sliding window for d'
+d_prime_trials = 10;
+slide_window = ones(d_prime_trials,1);
+
+d_prime = cell(size(mice));
+for curr_animal = 1:length(mice);
+    
+    n_session_trials = cellfun(@(x) size(x,1),analysis.condition_trials{curr_animal});
+    n_sessions = length(analysis.condition_trials{curr_animal});
+    
+    curr_conditions = vertcat(analysis.condition_trials{curr_animal}{:});
+    curr_conditions_slide = conv2(+curr_conditions,slide_window,'same');
+    hit_rate = curr_conditions_slide(:,1)./ ...
+        (curr_conditions_slide(:,1) + curr_conditions_slide(:,4));
+    fa_rate = curr_conditions_slide(:,3)./ ...
+        (curr_conditions_slide(:,3) + curr_conditions_slide(:,2));
+    curr_d_prime = zscore(hit_rate) - zscore(fa_rate);
+    d_prime{curr_animal} = mat2cell(curr_d_prime,n_session_trials,1);
+    
+end
+
+
+
+%% Slide 4) d' vs. correlation
+
+% take moving average of activity in trials and maybe manual inspection:
+% the point here is to see if correlation drops around reversal but then
+% comes back up with d'
+
+% or maybe more directly, get correlation v. d' across days
+
+
+% d': CL cont 1 vs CL cont 1
+n_bins = 10;
+
+d_prime_act_corr = nan(n_bins,n_bins,length(mice));
+for curr_animal = 1:length(mice)
+    
+    curr_CL_d_prime = ...
+        cell2mat(cellfun(@(x,y) x(y(:,1)), d_prime{curr_animal}, ...
+        analysis.condition_trials{curr_animal}','uni',false));
+    
+    curr_act = cell2mat(cellfun(@(x,y) reshape(permute(vertcat( ...
+        x{:}),[2 3 1]),size(x{end},2)*size(x{end},3),[]), ...
+        analysis.epoch_activity_CL{curr_animal},'uni',false));
+    
+    curr_contingency = cell2mat(cellfun(@(a,b) cell2mat(cellfun(@(x,y) repmat(x,size(y,1),1), ...
+        num2cell(a),b,'uni',false)),analysis.epoch_contingencies{curr_animal}', ...
+        analysis.epoch_activity_CL{curr_animal}','uni',false));
+    
+    d_prime_edges = linspace(prctile(curr_CL_d_prime,10),max(curr_CL_d_prime),n_bins);
+    d_prime_edges(1) = -Inf;
+    [n bin] = histc(curr_CL_d_prime,d_prime_edges);
+    
+    % correlation by bin
+    for curr_bin_1 = 1:n_bins
+        for curr_bin_2 = 1:n_bins
+            curr_total_corr = corrcoef([curr_act(:,bin == curr_bin_1) ...
+                curr_act(:,bin == curr_bin_2)],'rows','complete');
+            
+            if curr_bin_1 ~= curr_bin_2
+                curr_corr = curr_total_corr( ....
+                    1:sum(bin == curr_bin_1),sum(bin == curr_bin_1)+1:end);
+            else
+                curr_corr = AP_itril(curr_total_corr,-1);
+            end
+            
+            curr_median_corr = nanmedian(curr_corr(:));
+            
+            d_prime_act_corr(curr_bin_1,curr_bin_2,curr_animal) = curr_median_corr;           
+        end
+    end   
+    disp(curr_animal);
+end
+
+%%% d': Licking CL cont 1 vs CL cont 1
+d_prime_lick_corr = nan(n_bins,n_bins,length(mice));
+for curr_animal = 1:length(mice)
+    
+    curr_CL_d_prime = ...
+        cell2mat(cellfun(@(x,y) x(y(:,1)), d_prime{curr_animal}, ...
+        analysis.condition_trials{curr_animal}','uni',false));
+    
+    curr_lick = cell2mat(cellfun(@(x,y) x(y(:,1),:), analysis.lick_rate{curr_animal}', ...
+        analysis.condition_trials{curr_animal}','uni',false))';    
+    
+    curr_contingency = cell2mat(cellfun(@(a,b) cell2mat(cellfun(@(x,y) repmat(x,size(y,1),1), ...
+        num2cell(a),b,'uni',false)),analysis.epoch_contingencies{curr_animal}', ...
+        analysis.epoch_activity_CL{curr_animal}','uni',false));
+    
+    d_prime_edges = linspace(prctile(curr_CL_d_prime,10),max(curr_CL_d_prime),n_bins);
+    d_prime_edges(1) = -Inf;
+    [n bin] = histc(curr_CL_d_prime,d_prime_edges);
+    
+    % correlation by bin
+    for curr_bin_1 = 1:n_bins
+        for curr_bin_2 = 1:n_bins
+            curr_total_corr = corrcoef([curr_lick(:,bin == curr_bin_1) ...
+                curr_lick(:,bin == curr_bin_2)]);
+            
+            if curr_bin_1 ~= curr_bin_2
+                curr_corr = curr_total_corr( ....
+                    1:sum(bin == curr_bin_1),sum(bin == curr_bin_1)+1:end);
+            else
+                curr_corr = AP_itril(curr_total_corr,-1);
+            end
+            
+            curr_median_corr = nanmedian(curr_corr(:));
+            
+            d_prime_lick_corr(curr_bin_1,curr_bin_2,curr_animal) = curr_median_corr;           
+        end
+    end   
+    disp(curr_animal);
+end
+
+%%% d': IL vs CL 
+n_bins = 10;
+
+d_prime_act_corr = nan(n_bins,n_bins,length(mice));
+for curr_animal = 1:length(mice)
+    
+    curr_d_prime = ...
+        vertcat(d_prime{curr_animal}{:});
+    
+    curr_condition = vertcat(analysis.condition_trials{curr_animal}{:});
+    
+    curr_act = cell2mat(cellfun(@(act) reshape(permute(vertcat( ...
+        act{:}),[2 3 1]),size(act{end},2)*size(act{end},3),[]), ...
+        analysis.epoch_activity_odor{curr_animal},'uni',false));
+    
+    curr_contingency = vertcat(analysis.odor_trials{curr_animal}{:});
+    
+    d_prime_edges = linspace(prctile(curr_d_prime,10),max(curr_d_prime),n_bins);
+    d_prime_edges(1) = -Inf;
+    [n bin] = histc(curr_d_prime,d_prime_edges);
+    
+    % correlation by bin
+    for curr_bin_1 = 1:n_bins
+        for curr_bin_2 = 1:n_bins
+            
+            curr_use_1 = bin == curr_bin_1 & ...
+                curr_condition(:,1) & curr_contingency(:,2) == 1;
+            
+            curr_use_2 = bin == curr_bin_2 & ...
+                curr_condition(:,3) & curr_contingency(:,2) == 2;
+            
+            curr_total_corr = corrcoef([curr_act(:,curr_use_1) ...
+                curr_act(:,curr_use_2)],'rows','complete');
+            
+                curr_corr = curr_total_corr( ....
+                    1:sum(curr_use_1),sum(curr_use_1)+1:end);
+           
+            curr_median_corr = nanmedian(curr_corr(:));
+            
+            d_prime_act_corr(curr_bin_1,curr_bin_2,curr_animal) = curr_median_corr;           
+        end
+    end   
+    disp(curr_animal);
+end
+
+%%% d': CL cont 1 vs CL cont 2
+n_bins = 10;
+
+d_prime_act_corr = nan(n_bins,n_bins,length(mice));
+for curr_animal = 1:length(mice)
+    
+    curr_d_prime = ...
+        vertcat(d_prime{curr_animal}{:});
+    
+    curr_condition = vertcat(analysis.condition_trials{curr_animal}{:});
+    
+    curr_act = cell2mat(cellfun(@(act) reshape(permute(vertcat( ...
+        act{:}),[2 3 1]),size(act{end},2)*size(act{end},3),[]), ...
+        analysis.epoch_activity_odor{curr_animal},'uni',false));
+    
+    curr_contingency = vertcat(analysis.odor_trials{curr_animal}{:});
+    
+    d_prime_edges = linspace(prctile(curr_d_prime,10),max(curr_d_prime),n_bins);
+    d_prime_edges(1) = -Inf;
+    [n bin] = histc(curr_d_prime,d_prime_edges);
+    
+    % correlation by bin
+    for curr_bin_1 = 1:n_bins
+        for curr_bin_2 = 1:n_bins
+            
+            curr_use_1 = bin == curr_bin_1 & ...
+                curr_condition(:,1) & curr_contingency(:,2) == 1;
+            
+            curr_use_2 = bin == curr_bin_2 & ...
+                curr_condition(:,1) & curr_contingency(:,2) == 2;
+            
+            curr_total_corr = corrcoef([curr_act(:,curr_use_1) ...
+                curr_act(:,curr_use_2)],'rows','complete');
+            
+                curr_corr = curr_total_corr( ....
+                    1:sum(curr_use_1),sum(curr_use_1)+1:end);
+           
+            curr_median_corr = nanmedian(curr_corr(:));
+            
+            d_prime_act_corr(curr_bin_1,curr_bin_2,curr_animal) = curr_median_corr;           
+        end
+    end   
+    disp(curr_animal);
+end
+
+
+%% GENERAL USE: get activity by epoch, with d' cutoff
+
+% define sliding window for d'
+d_prime_trials = 10;
+slide_window = ones(d_prime_trials,1);
+
+d_prime = cell(size(mice));
+for curr_animal = 1:length(mice);
+    
+    n_session_trials = cellfun(@(x) size(x,1),analysis.condition_trials{curr_animal});
+    n_sessions = length(analysis.condition_trials{curr_animal});
+    
+    curr_conditions = vertcat(analysis.condition_trials{curr_animal}{:});
+    curr_conditions_slide = conv2(+curr_conditions,slide_window,'same');
+    hit_rate = curr_conditions_slide(:,1)./ ...
+        (curr_conditions_slide(:,1) + curr_conditions_slide(:,4));
+    fa_rate = curr_conditions_slide(:,3)./ ...
+        (curr_conditions_slide(:,3) + curr_conditions_slide(:,2));
+    curr_d_prime = zscore(hit_rate) - zscore(fa_rate);
+    d_prime{curr_animal} = mat2cell(curr_d_prime,n_session_trials,1);
+    
+end
+
+n_bins = 10;
+d_prime_use_trials_CL_epoch = cell(length(mice),1);
+d_prime_use_trials_CR_epoch = cell(length(mice),1);
+for curr_animal = 1:length(mice)
+    
+    % I think all this going in circles isn't actually necessary, can split
+    % d' up earlier instead of unpacking and repacking
+    curr_d_prime = ...
+        vertcat(d_prime{curr_animal}{:});
+    
+    curr_condition = vertcat(analysis.condition_trials{curr_animal}{:});
+       
+    curr_odor = vertcat(analysis.odor_trials{curr_animal}{:});
+    curr_contingency = curr_odor(:,2);
+    
+    d_prime_edges = linspace(prctile(curr_d_prime,10),max(curr_d_prime),n_bins);
+    d_prime_edges(1) = -Inf;
+    [n bin] = histc(curr_d_prime,d_prime_edges);
+    
+    d_prime_cutoff = d_prime_edges(end-3);
+    d_prime_use_trials = curr_d_prime >= d_prime_cutoff;
+    
+    % CL
+    d_prime_use_trials_CL = d_prime_use_trials(curr_condition(:,1));
+    
+    d_prime_use_trials_CL_session = mat2cell(d_prime_use_trials_CL, ...
+        cellfun(@(x) size(vertcat(x{:}),1),analysis.epoch_activity_CL{curr_animal}));
+    
+    d_prime_use_trials_CL_epoch{curr_animal} = cellfun(@(x,y) mat2cell(x,cellfun(@(z) size(z,1),y)), ...
+        d_prime_use_trials_CL_session', ...
+        analysis.epoch_activity_CL{curr_animal},'uni',false);
+    
+    % CR
+    d_prime_use_trials_CR = d_prime_use_trials(curr_condition(:,2));
+    
+    d_prime_use_trials_CR_session = mat2cell(d_prime_use_trials_CR, ...
+        cellfun(@(x) size(vertcat(x{:}),1),analysis.epoch_activity_CR{curr_animal}));
+    
+    d_prime_use_trials_CR_epoch{curr_animal} = cellfun(@(x,y) mat2cell(x,cellfun(@(z) size(z,1),y)), ...
+        d_prime_use_trials_CR_session', ...
+        analysis.epoch_activity_CR{curr_animal},'uni',false);
+    
+    
+
+    disp(curr_animal);
+end
+
+
+
+
+similarity = 'pca'; % 'correlation', 'pca'
+trial_time = [0 2]; % min/max trial time to look at, seconds from odor onset
+sig_cells_only = false; % force nonsignificant cells to have value of 0
+
+% Get animal group indicies
+rev_animals = cellfun(@(x) strcmp(x,'y'),{mice.switch});
+ctrl_animals = cellfun(@(x) strcmp(x,'n'),{mice.switch});
+pmm_animals = cellfun(@(x) strcmp(x,'PMM'),{mice.location});
+alm_animals = cellfun(@(x) strcmp(x,'ALM'),{mice.location});
+
+
+% Identify significantly active cells from baseline if selected
+if sig_cells_only
+    % Go through each epoch, compare to baseline (significant & above)
+    trial_epochs = 4;
+    baseline_multiepoch_sigdiff = cell(length(animals),1);
+    for curr_animal = 1:length(animals)
+        for curr_session = 1:length(analysis.epoch_activity_CL{curr_animal});
+            for curr_reversal = 1:length(analysis.epoch_activity_CL{curr_animal}{curr_session})
+                for curr_epoch = 1:trial_epochs;
+                    
+                    frames = analysis.epoch_frames{curr_animal}{curr_session};
+                    curr_epoch_frames = frames(1):frames(2) > (curr_epoch-1)*frames(2)/trial_epochs & ...
+                        frames(1):frames(2) < curr_epoch*frames(2)/trial_epochs;
+                    
+                    baseline_frames = frames(1):frames(2) < 0;
+                    
+                    curr_activity = analysis.epoch_activity_CL{curr_animal}{curr_session}{curr_reversal}( ...
+                        d_prime_use_trials_CL_epoch{curr_animal}{curr_session}{curr_reversal},:,:);
+                    
+                    baseline_multiepoch_sigdiff{curr_animal}{curr_session}{curr_reversal}{curr_epoch} = ...
+                        AP_signrank_matrix( ...
+                        permute(nanmean(curr_activity(:,baseline_frames,:),2),[1 3 2]), ...
+                        permute(nanmean(curr_activity(:,curr_epoch_frames,:),2),[1 3 2])) ...
+                        < 0.01 & ...
+                        nanmean(permute(nanmean(curr_activity(:,frames(1):frames(2) < 0,:),2),[1 3 2]),1) < ...
+                        nanmean(permute(nanmean(curr_activity(:,curr_epoch_frames,:),2),[1 3 2]),1);
+                    
+                end
+            end
+        end
+        disp(curr_animal);
+    end
+end
+ 
+
+all_active_trials = cell(length(animals),1);
+all_contingencies = cell(length(animals),1);
+all_latereversal = cell(length(animals),1);
+all_sessions = cell(length(animals),1);
+
+% Get activity
+for curr_animal = 1:length(mice)
+        
+    curr_slot = 1;
+    for curr_session = 1:length(data_all(curr_animal).im);
+        
+        % define reversal (use only the first so that it's settled in)
+        for curr_rev = 1:length(analysis.epoch_contingencies{curr_animal}{curr_session});
+            
+            revs = [1;find(diff(analysis.odor_trials{curr_animal}{curr_session}(:,2)))+1;...
+                size(analysis.odor_trials{curr_animal}{curr_session},1)];
+            % if there are < 10 trials in reversal, assume early/not real
+            % reversal and use the next one
+            rev_trials = diff(revs);
+            if rev_trials(curr_rev) < 10
+                curr_rev = curr_rev + 1;
+            end
+            
+            % use time in the trial defined by user
+            use_frames = data_all(curr_animal).im(curr_session).framerate*trial_time;
+            curr_frames = analysis.epoch_frames{curr_animal}{curr_session}(1) : ...
+                analysis.epoch_frames{curr_animal}{curr_session}(2);
+            curr_odor_frames = curr_frames > use_frames(1) & curr_frames <= use_frames(2);
+            
+            curr_act = analysis.epoch_activity_CL{curr_animal}{curr_session}{curr_rev} ...
+                (d_prime_use_trials_CL_epoch{curr_animal}{curr_session}{curr_rev},curr_odor_frames,:);
+            % skip this if less than 20 trials
+            if size(curr_act,1) < 20
+                continue
+            end
+            
+            curr_active_trials = permute(nanmean(any(curr_act,2),1),[3 1 2]);
+            % if selected, force cells not significantly active during
+            % selected trial time to be 0
+            if sig_cells_only 
+                trial_epochs_ends = linspace(0,4,trial_epochs+1); % the ends of the epochs (sec)
+                trial_epochs_use = trial_epochs_ends(2:end) > floor(trial_time(1)) & ...
+                    trial_epochs_ends(2:end) <= ceil(trial_time(2));
+                
+                curr_sigcells = ...
+                    any(vertcat(baseline_multiepoch_sigdiff{curr_animal} ...
+                    {curr_session}{curr_rev}{trial_epochs_use}),1)';                              
+                
+                curr_active_trials(~curr_sigcells) = 0;
+            end
+            
+            curr_contingency = analysis.epoch_contingencies{curr_animal}{curr_session}(curr_rev);           
+            % if control animal, don't use anything past session 10 or if
+            % contingency 2 has appeared (because reversal in these
+            % animals, but it's late - I'm not using this data for now)
+            if ismember(curr_animal,find(ctrl_animals));
+                if curr_session > 10 || curr_contingency == 2
+                    continue
+                end
+            end
+            
+            all_active_trials{curr_animal,curr_slot} = curr_active_trials;
+            all_contingencies{curr_animal}(curr_slot) = curr_contingency;
+            all_sessions{curr_animal}(curr_slot) = curr_session;
+            
+            % 'Late' for reversal animals = anything including and after
+            % the second reversal
+            if ismember(curr_animal,find(rev_animals));
+                all_latereversal{curr_animal}(curr_slot) = ...
+                    sum(diff(all_contingencies{curr_animal}) ~= 0) > 1;
+            else
+                % 'Late for control animals = anything after the 6th session
+                all_latereversal{curr_animal}(curr_slot) = ...
+                    curr_session >= 6;
+            end
+            curr_slot = curr_slot + 1;
+            
+        end
+    end
+end
+
+
+
+%% Jun requested analysis: frac active, etc
+% 1) % hit cells across days in ctrl/rev
+% -- for rev, between rev 1-2, beween rev 2-3, after 3rd reversal
+% 2) % CR cells across days in ctrl/rev
+%
+% (also try using d' cutoff here)
+
+% Convert epoch frames into seconds
+framerate_animals =  arrayfun(@(x) {data_all(x).im(:).framerate},1:length(data_all),'uni',false);
+epoch_seconds = cellfun(@(x,y) cellfun(@(a,b) a/b,x,y,'uni',false),analysis.epoch_frames, 
+
+% Get significant cells (fraction active during CL compared to baseline)
+baseline_CL_sigcells = ...
+    cellfun(@(odor,frames) cellfun(@(odor,frames) cellfun(@(odor) ...
+    AP_chisquare_matrix( ...
+    permute(any(odor(:,frames(1):frames(2) < 0,:),2),[1 3 2]), ...
+    permute(any(odor(:,frames(1):frames(2) > 0 & ...
+    frames(1):frames(2) < 2,:),2),[1 3 2])) ...
+    < 0.05, odor,'uni',false),odor,frames,'uni',false), ...
+    analysis.epoch_activity_CL,analysis.epoch_frames,...
+    'uni',false);
+
+baseline_CR_sigcells = ...
+    cellfun(@(odor,frames) cellfun(@(odor,frames) cellfun(@(odor) ...
+    AP_chisquare_matrix( ...
+    permute(any(odor(:,frames(1):frames(2) < 0,:),2),[1 3 2]), ...
+    permute(any(odor(:,frames(1):frames(2) > 0 & ...
+    frames(1):frames(2) < 2,:),2),[1 3 2])) ...
+    < 0.05, odor,'uni',false),odor,frames,'uni',false), ...
+    analysis.epoch_activity_CR,analysis.epoch_frames,...
+    'uni',false);
+
+% Get significant cells (fraction active during CL compared to baseline)
+% + only use d' cutoff trials
+baseline_dprime_CL_sigcells = ...
+        cellfun(@(odor,frames,trials) cellfun(@(odor,frames,trials) cellfun(@(odor,trials) ...
+        AP_chisquare_matrix( ...
+        permute(any(odor(trials,frames(1):frames(2) < 0,:),2),[1 3 2]), ...
+        permute(any(odor(trials,frames(1):frames(2) > 0 & ...
+        frames(1):frames(2) < 2,:),2),[1 3 2])) ...
+        < 0.05,odor,trials,'uni',false),odor,frames,trials,'uni',false), ...
+        analysis.epoch_activity_CL,analysis.epoch_frames,...
+        d_prime_use_trials_CL_epoch', ...
+        'uni',false);
+    
+baseline_dprime_CR_sigcells = ...
+        cellfun(@(odor,frames,trials) cellfun(@(odor,frames,trials) cellfun(@(odor,trials) ...
+        AP_chisquare_matrix( ...
+        permute(any(odor(trials,frames(1):frames(2) < 0,:),2),[1 3 2]), ...
+        permute(any(odor(trials,frames(1):frames(2) > 0 & ...
+        frames(1):frames(2) < 2,:),2),[1 3 2])) ...
+        < 0.05,odor,trials,'uni',false),odor,frames,trials,'uni',false), ...
+        analysis.epoch_activity_CR,analysis.epoch_frames,...
+        d_prime_use_trials_CR_epoch', ...
+        'uni',false);
+
+% Get animal group indicies
+rev_animals = cellfun(@(x) strcmp(x,'y'),{mice.switch});
+ctrl_animals = cellfun(@(x) strcmp(x,'n'),{mice.switch});
+pmm_animals = cellfun(@(x) strcmp(x,'PMM'),{mice.location});
+alm_animals = cellfun(@(x) strcmp(x,'ALM'),{mice.location});
+
+%%
+
+use_animals = find(alm_animals & rev_animals);
+use_cont = 1;
+    
+curr_baseline_dprime_sigcells = cell(length(analysis),1);
+curr_baseline_sigcells = cell(length(analysis),1);
+for curr_animal_idx = 1:length(use_animals);
+    
+    curr_animal = use_animals(curr_animal_idx);
+    
+    % d' cutoff
+    curr_sig = baseline_dprime_CL_sigcells{curr_animal};
+    curr_cont = analysis.epoch_contingencies{curr_animal};
+    
+    curr_use_epochs = cellfun(@(x) x == use_cont,curr_cont,'uni',false);
+    curr_sig_use = cellfun(@(x,y) any(vertcat(x{y}),1),curr_sig,curr_use_epochs,'uni',false);
+    
+    curr_baseline_dprime_sigcells{curr_animal_idx} = ...
+        NaN(length(curr_sig_use),size(vertcat(curr_sig_use{:}),2));
+    use_sessions = cellfun(@(x) ~isempty(x),curr_sig_use);
+    curr_baseline_dprime_sigcells{curr_animal_idx}(use_sessions,:) = vertcat(curr_sig_use{:});
+    
+    % all trials
+    curr_sig = baseline_CL_sigcells{curr_animal};
+    curr_cont = analysis.epoch_contingencies{curr_animal};
+    
+    curr_use_epochs = cellfun(@(x) x == use_cont,curr_cont,'uni',false);
+    curr_sig_use = cellfun(@(x,y) any(vertcat(x{y}),1),curr_sig,curr_use_epochs,'uni',false);
+    
+    curr_baseline_sigcells{curr_animal_idx} = ...
+        NaN(length(curr_sig_use),size(vertcat(curr_sig_use{:}),2));
+    use_sessions = cellfun(@(x) ~isempty(x),curr_sig_use);
+    curr_baseline_sigcells{curr_animal_idx}(use_sessions,:) = vertcat(curr_sig_use{:});    
+end
+
+curr_baseline_dprime_sigcells_mean = cellfun(@(x) ...
+    nanmean(x,2),curr_baseline_dprime_sigcells,'uni',false);
+
+curr_baseline_sigcells_mean = cellfun(@(x) ...
+    nanmean(x,2),curr_baseline_sigcells,'uni',false);
+
+figure; hold on;
+
+max_sessions = max(cellfun(@length,curr_baseline_dprime_sigcells_mean));
+data_nanpad = cell2mat(cellfun(@(x) [x;nan(max_sessions-length(x),1)],curr_baseline_dprime_sigcells_mean,'uni',false))';
+errorbar(nanmean(data_nanpad),nanstd(data_nanpad)./sqrt(sum(~isnan(data_nanpad))),'r','linewidth',2)
+
+max_sessions = max(cellfun(@length,curr_baseline_sigcells_mean));
+data_nanpad = cell2mat(cellfun(@(x) [x;nan(max_sessions-length(x),1)],curr_baseline_sigcells_mean,'uni',false))';
+errorbar(nanmean(data_nanpad),nanstd(data_nanpad)./sqrt(sum(~isnan(data_nanpad))),'k','linewidth',2)
+    
+ylabel('Fraction of active cells');
+xlabel('Session');
+legend({'D'' cutoff' 'All'})
+
+% History of active cells
+max_sessions = max(cellfun(@(x) size(x,1),curr_baseline_dprime_sigcells));
+
+curr_baseline_dprime_sigcells_history = cell2mat(cellfun(@(x) ...
+    padarray(sum(x(2:end,:) == 1 & cumsum(x(1:end-1,:)>0,1) > 0,2)./sum(x(2:end,:) == 1,2), ...
+    max_sessions-size(x,1),NaN,'post'),curr_baseline_dprime_sigcells,'uni',false))';
+
+curr_baseline_sigcells_history = cell2mat(cellfun(@(x) ...
+    padarray(sum(x(2:end,:) == 1 & cumsum(x(1:end-1,:)>0,1) > 0,2)./sum(x(2:end,:) == 1,2), ...
+    max_sessions-size(x,1),NaN,'post'),curr_baseline_sigcells,'uni',false))';
+
+figure; hold on;
+errorbar(nanmean(curr_baseline_dprime_sigcells_history), ...
+    nanstd(curr_baseline_dprime_sigcells_history)./ ...
+    sqrt(sum(~isnan(curr_baseline_dprime_sigcells_history))),'r','linewidth',2)
+
+errorbar(nanmean(curr_baseline_sigcells_history), ...
+    nanstd(curr_baseline_sigcells_history)./ ...
+    sqrt(sum(~isnan(curr_baseline_sigcells_history))),'k','linewidth',2)
+
+ylabel('Fraction of active cells active previously');
+xlabel('Session');
+legend({'D'' cutoff' 'All'})
+
+% Sig cell correlation
+max_sessions = max(cellfun(@(x) size(x,1),curr_baseline_dprime_sigcells));
+
+curr_baseline_dprime_sigcells_corr = cellfun(@(x) padarray(corrcoef(x'), ...
+    repmat(max_sessions-size(x,1),1,2),NaN,'post'),curr_baseline_dprime_sigcells,'uni',false);
+
+curr_baseline_sigcells_corr = cellfun(@(x) padarray(corrcoef(x'), ...
+    repmat(max_sessions-size(x,1),1,2),NaN,'post'),curr_baseline_sigcells,'uni',false);
+
+figure;
+subplot(2,2,1);
+imagesc(nanmean(cat(3,curr_baseline_dprime_sigcells_corr{:}),3));
+colormap(gray); caxis([0 1]);
+title('D'' cutoff');
+xlabel('Session');
+ylabel('Session');
+subplot(2,2,2);
+imagesc(nanmean(cat(3,curr_baseline_sigcells_corr{:}),3));
+colormap(gray); caxis([0 1]);
+title('All trials')
+xlabel('Session');
+ylabel('Session');
+subplot(2,2,3);
+curr_diag = cell2mat(cellfun(@(x) diag(x,-1),curr_baseline_dprime_sigcells_corr,'uni',false));
+errorbar(nanmean(curr_diag,2),nanstd(curr_diag,[],2)./sqrt(sum(~isnan(curr_diag),2)),'k','linewidth',2)
+xlim([0 max_sessions+1])
+title('1st diagonal')
+ylabel('Fraction cells');
+xlabel('Session');
+subplot(2,2,4);
+curr_diag = cell2mat(cellfun(@(x) diag(x,-1),curr_baseline_sigcells_corr,'uni',false));
+errorbar(nanmean(curr_diag,2),nanstd(curr_diag,[],2)./sqrt(sum(~isnan(curr_diag),2)),'k','linewidth',2)
+xlim([0 max_sessions+1])
+title('1st diagonal')
+ylabel('Fraction cells');
+xlabel('Session');
+
+
+
+
+
+
+
+    
+    
+    
+    
+    
+    
+    
+

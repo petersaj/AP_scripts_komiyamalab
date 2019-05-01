@@ -1,0 +1,26 @@
+% number of first polygon
+% create polygon cell array
+
+% method for general mouse click, enter to finish
+%[polygon{n_polygon}(:,1),polygon{n_polygon}(:,2)] = ginput;
+%cellMask = poly2mask(polygon{1}(:,1),polygon{1}(:,2),8,8)
+
+%method for roi polygon
+[cellMask,polygon.ROI{n_polygon}(:,1),polygon.ROI{n_polygon}(:,2)] = roipoly;
+
+% method to display outline of polygon
+% polygon.handles{n_polygon} = impoly(gca,[polygon.ROI{n_polygon}(:,1) polygon.ROI{n_polygon}(:,2)]);
+% setColor(polygon.handles{n_polygon},'g')
+% set(polygon.handles{n_polygon}, 'ButtonDownFcn', @selectROI);
+
+% method to display just an outline when not selected
+polygon.handles{n_polygon} = line(polygon.ROI{n_polygon}(:,1), polygon.ROI{n_polygon}(:,2));
+set(polygon.handles{n_polygon}, 'ButtonDownFcn', @selectROI, hObject, get(polygon.handles{n_polygon}, 'ButtonDownFcn')});
+
+% if you need to connect the two end points:
+%plot([polygon{n_polygon}(end,1) polygon{n_polygon}(1,1)],...
+    %[polygon{n_polygon}(end,2) polygon{n_polygon}(1,2)]);
+    
+% display filled polygon
+%patch(polygon{n_polygon}(:,1),polygon{n_polygon}(:,2),'green');
+

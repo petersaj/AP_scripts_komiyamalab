@@ -1,0 +1,114 @@
+% This is to get data and figures for the PSEM experiments
+clear all
+
+animal = 'AP80';
+
+% find all days
+data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+data_dir = dir(data_path);
+data_names = {data_dir.name};
+data_fullnames = cellfun(@(x) [data_path filesep x],data_names, ...
+    'UniformOutput',false);
+data_isfolders = cellfun(@(x) isdir(x),data_fullnames);
+data_folders = data_fullnames(data_isfolders);
+data_regexp = regexp(data_folders,'\d\d\d\d\d\d');
+data_days = data_folders(cellfun(@(x) ~isempty(x),data_regexp));
+days = cellfun(@(x) x(end-5:end),data_days,'UniformOutput',false);
+
+% get behavior from each day
+for curr_day = 1:length(days)
+    clearvars -except animal days curr_day psem
+    
+    day = num2str(days{curr_day});
+    
+    data_path = ['/usr/local/lab/Data/ImagingRig3/' day filesep animal];
+    
+    % Get behavior filename
+    dir_currfolder = dir(data_path);
+    dir_filenames = {dir_currfolder.name};
+    bhv_file = strncmp('data_@',dir_filenames,6);
+    bhv_filename = [cell2mat(dir_filenames(bhv_file == 1))];
+    bhv_fullfilename = [data_path filesep bhv_filename];
+    warning off
+    load(bhv_fullfilename)
+    warning on
+    bhv = saved_history.ProtocolsSection_parsed_events;
+    
+    %%%% get start time of all trials
+    all_bitcode = cellfun(@(x) x.states.bitcode(1), bhv);
+    
+    %%%% get number of rewarded trials
+    all_reward = cellfun(@(x) x.states.reward, bhv,'uni',0);
+    psem.freq_reward(curr_day) = sum(cellfun(@(x) ~isempty(x), all_reward))/length(bhv);
+
+    %%%% get number of licks
+    all_licks = cellfun(@(x) x.pokes.C(:,1), bhv,'uni',0);
+    psem.freq_licks(curr_day) = sum(cellfun(@length,all_licks))/length(bhv);
+
+    %%%% get total movement of lever
+    
+    % Get XSG filenames
+    xsg_path = [data_path filesep 'AP' '00' animal(3:4)];
+    dir_currfolder_xsg = dir(xsg_path);
+    dir_xsg_filenames = {dir_currfolder_xsg.name};
+    xsg_filename_indx = cellfun(@(x) ~isempty(strfind(x,'.xsg')), dir_xsg_filenames);
+    xsg_filename_all = dir_xsg_filenames(xsg_filename_indx);
+    % make sure they're in order
+    xsg_filename_all = sort(xsg_filename_all);xsg_filename_all = dir_xsg_filenames(xsg_filename_indx);
+    % make sure they're in order
+    xsg_filename_all = sort(xsg_filename_all);
+    xsg_fullfilenames = cellfun(@(x) [xsg_path filesep x],xsg_filename_all,'UniformOutput',false);
+    
+    lever_vel_all = cell(size(xsg_fullfilenames));
+    lever_time_all = cell(size(xsg_fullfilenames));
+    
+    for curr_xsg = 1:length(xsg_fullfilenames)
+        xsg_data = load(xsg_fullfilenames{curr_xsg},'-MAT');
+        
+        curr_trial_list = AP_ReadBitCode(xsg_fullfilenames{curr_xsg});
+        % if trials are not consecutive, delete the offending trial
+        consec_trials = [0;diff(curr_trial_list(:,2))];
+        curr_trial_list(consec_trials ~= 1,:) = [];    
+        [lever_active lever_force_smooth lever_force_velocity] = ...
+            AP_parseLeverMovement(xsg_data);  
+        
+        lever_vel_all{curr_xsg} = lever_force_velocity;
+        xsg_start = all_bitcode(curr_trial_list(1,2)) - ...
+            curr_trial_list(1,1);
+        % resampled lever force velocity is at 1kHz
+        lever_time_all{curr_xsg} = xsg_start:0.001: ...
+            (xsg_start-0.001)+length(lever_force_velocity)*0.001;
+    end
+    
+    lever_vel_concat = vertcat(lever_vel_all{:});
+    lever_time_concat = vertcat(lever_time_all{:});
+    
+    % break data into 5 minute segments for averaging
+    bin_edges = lever_time_all{1}(1):300:lever_time_all{end}(end);
+    [n,trial_bin] = histc(all_bitcode,bin_edges);
+    [n,trial_bin] = histc(all_bitcode,bin_edges);
+    
+    % save as cells 1: edges, 2: cr activity, 3: cr groups
+    % 4: iti activity, 5: iti groups
+    move_params_act{curr_param}{1} = bin_edges;
+    move_params_act{curr_param}{2} = ...
+        movement_sum_oopsi(:,cued_rewarded_movements);
+    move_params_act{curr_param}{3} = move_params_cr_bin;
+    move_params_act{curr_param}{4} = ...
+        movement_sum_oopsi(:,iti_movements);
+    move_params_act{curr_param}{5} = move_params_iti_bin;
+    
+    
+    curr_cell = 7;
+    cr_bin_mean = grpstats(move_params_act{1}{2}(curr_cell,:), ...
+        move_params_act{1}{3},'mean');
+    iti_bin_mean = grpstats(move_params_act{1}{4}(curr_cell,:), ...
+        move_params_act{1}{5},'mean');
+    
+end
+
+
+
+
+
+

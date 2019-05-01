@@ -1,0 +1,79 @@
+%% Get times, states, trials for left lever down
+
+times = saved_history.RewardsSection_LastTrialEvents;
+trial_num = [];
+states_down = [];
+states_up = [];
+left_down = [];
+left_up = [];
+left_times = [];
+for i = 1:length(times)
+    
+    % fixes possible bug of putting in old timepoints at the end
+    LastGoodTrial = find(diff(times{i}(:,3)) < 0,1);
+    if ~isempty(LastGoodTrial)
+        times{i} = times{i}(1:LastGoodTrial,:);
+    end
+    
+    % ignore jitter state 
+    left_down_indx = find(times{i}(:,2) == 5 &...
+        times{i}(:,1) ~= 46);
+    left_up_indx = find(times{i}(:,2) == 6 &...
+        times{i}(:,1) ~= 46);
+    
+    trial_down_curr = i*ones(length(left_down_indx),1);
+    trial_up_curr = i*ones(length(left_up_indx),1);
+    states_down_curr = times{i}(left_down_indx,1);
+    states_up_curr = times{i}(left_up_indx,1);
+    
+    states_down = [states_down;states_down_curr];
+    states_up = [states_up;states_up_curr];
+    trial_down_num = [trial_num;trial_down_curr];
+    trial_up_num = [trial_num;trial_up_curr];
+    left_down = [left_down;times{i}(left_down_indx,3)];
+    left_up = [left_up;times{i}(left_up_indx,3)];
+end
+
+% find bad lever press matches, should make equal lengths
+% first for double down/ups
+bad_up = [];
+bad_down = [];
+
+left_all = [left_down 1*ones(length(left_down),1);...
+left_up 2*ones(length(left_up),1)]; % cat all rows, mark down 1 up 2
+left_sorted = sortrows(left_all); % sort by time, keep marks
+left_alt = diff(left_sorted(:,2));
+false_indx = find(left_alt == 0); % look for 2 same in a row
+false_dir = left_sorted(false_indx,2);
+% 1 is down, 2 is up
+for curr_false = 1:length(false_dir);
+    if false_dir(curr_false) == 1;
+        bad_down = [bad_down; find(left_down == left_sorted(false_indx(curr_false),1))];
+    elseif false_dir(curr_false) == 2;
+        bad_up = [bad_up; find(left_up == left_sorted(false_indx(curr_false),1))];
+    end
+end
+
+% correct ends for start/ending lever position
+if left_up(1) - left_down(1) < 0; % lever was down at start
+    left_times = left_up(2:end) - left_down;
+    left_up = left_up(2:end);
+    states_up = states_up(2:end);
+elseif left_up(end) - left_down(end) < 0; % lever down at end
+    left_times = left_up - left_down(1:end-1);
+else
+    left_times = left_up - left_down;
+end
+
+% eliminate the bad times from doubles or start/end
+left_up(bad_up)= [];
+left_down(bad_down) = [];
+
+% elimitate 2 s < lever times < 2 ms
+nonartifact_times = left_times <= 2 & left_times >= 0.002;
+left_down = left_down(nonartifact_times);
+left_up = left_up(nonartifact_times);
+left_times = left_times(nonartifact_times);
+states_up = states_up(nonartifact_times);
+states_down = states_down(nonartifact_times);
+trial_num = trial_num(nonartifact_times);

@@ -1,0 +1,336 @@
+% Analyze movement vs activity correlation
+% data from AP_corticospinal_prepare_processed
+
+
+%% Trial-by-trial correlation of pyr activity vs. correlation of movement
+
+%%%%%%%% TO DO HERE: RESTRICT ACTIVITY TIME TO MATCH MOVEMENT TIME
+% Have to estimate this at the moment
+
+framerate = 28;
+
+activity_corr_stages_mean = cell(length(analysis),2);
+activity_corr_stages_sem = cell(length(analysis),2);
+for curr_animal = 1:length(analysis)
+    
+    movement_start_time = 1001;
+    movement_use_time = 3000;
+    
+    % to correspond to movement
+    use_frames = analysis(curr_animal).surrounding_frames > 0 & ...
+        analysis(curr_animal).surrounding_frames < framerate*(movement_use_time/1000);
+    
+    % custom
+    %use_frames = 15:105;
+    
+    % Define trials to use
+    n_sessions = length(analysis(curr_animal).lever);
+    use_sessions = arrayfun(@(x) ~isempty(analysis(curr_animal).lever(x).rewarded_movement),1:n_sessions);
+    
+    % Trial-by-trial movement correlation
+    movement_corr = cell(n_sessions,1);
+    movement_corr(use_sessions) = cellfun(@(movement,trials) AP_itril(corrcoef(cell2mat(cellfun(@(x) ...
+        x(movement_start_time:movement_start_time+movement_use_time),movement(trials),'uni',false)')),-1), ...
+        {analysis(curr_animal).lever(use_sessions).rewarded_movement}, ...
+        {analysis(curr_animal).lever(use_sessions).cued_movement_trials},'uni',false);
+    
+    % Trial-by-trial activity correlation
+    if isfield(analysis,'labels');
+        use_cells = ~analysis(curr_animal).labels.gad_cells;
+    else
+        use_cells = true(size(analysis(curr_animal).im(1).move_onset_aligned,3),1);
+    end
+    
+    activity_corr = cell(n_sessions,1);
+    activity_corr(use_sessions) = cellfun(@(activity) ...
+        AP_itril(corrcoef(reshape(permute( ...
+        activity(:,use_frames,use_cells), ...
+        [2 3 1]),[],size(activity,1)),'rows','pairwise'),-1), ...
+        {analysis(curr_animal).im(use_sessions).move_onset_aligned},'uni',false);
+    
+    % Bin trials by movement correlation
+    corr_bin = [-1:0.2:1];
+    corr_bin_use = [corr_bin(1:end-1) Inf];
+    corr_bin_plot = corr_bin(1:end-1) + diff(corr_bin)/2;
+    
+    % Groups stages of learning, bin
+    stages = {[1:4] [10:14]};    
+    % if no days available from given stage, exclude animal
+    if any(~cellfun(@(x) any(ismember(x,1:length(analysis(curr_animal).im))),stages));
+        continue
+    end       
+            
+    stages_col = {'k','r'};
+    movement_corr_stages = cellfun(@(x) vertcat(movement_corr{x}),stages,'uni',false);
+    activity_corr_stages = cellfun(@(x) vertcat(activity_corr{x}),stages,'uni',false);
+    [~,stages_bin_idx] = cellfun(@(x) histc(x,corr_bin_use),movement_corr_stages,'uni',false);
+    stages_bins_used = cellfun(@unique,stages_bin_idx,'uni',false);
+    
+    curr_stage_mean = repmat({nan(length(corr_bin_use),1)},1,2);
+    curr_stage_sem = repmat({nan(length(corr_bin_use),1)},1,2);
+    for curr_stage = 1:length(stages)
+       
+        curr_mean = grpstats(activity_corr_stages{curr_stage},stages_bin_idx{curr_stage},'mean');
+        curr_sem = grpstats(activity_corr_stages{curr_stage},stages_bin_idx{curr_stage},'sem');
+        
+        curr_stage_mean{curr_stage}(stages_bins_used{curr_stage}) = curr_mean;
+        curr_stage_sem{curr_stage}(stages_bins_used{curr_stage}) = curr_sem;
+        
+    end
+    
+    activity_corr_stages_mean(curr_animal,:) = curr_stage_mean;
+    activity_corr_stages_sem(curr_animal,:) = curr_stage_sem;
+    
+    disp(curr_animal);
+    
+end
+
+% % Plot stages
+% figure; hold on
+% for curr_stage = 1:length(stages)
+%     errorbar(corr_bin_plot(stages_bins_used{curr_stage}), ...
+%         activity_corr_stages_mean{curr_stage}, ...
+%         activity_corr_stages_sem{curr_stage},'color',stages_col{curr_stage});
+% end
+
+
+
+%% Template-based correlations
+
+stages_activity_template_corr_mean = cell(length(analysis),2);
+stages_activity_template_corr_sem = cell(length(analysis),2);
+
+for curr_animal = 1:length(analysis)
+    movement_start_time = 1001;
+    movement_use_time = 3000;
+    
+    % Concatenate movement/activity into learning stages
+    stages = {[1:4] [10:14]};
+    % if no days available from given stage, exclude animal
+    if any(~cellfun(@(x) any(ismember(x,1:length(analysis(curr_animal).im))),stages));
+        continue
+    end  
+    stages_col = {'k','r'};
+    
+    stages_movement = cellfun(@(sessions) cell2mat(cellfun(@(lever,trials) horzcat(cell2mat(cellfun(@(x) ...
+        x(movement_start_time:movement_start_time+movement_use_time),lever(trials),'uni',false)')), ...
+        {analysis(curr_animal).lever(sessions).rewarded_movement}, ...
+        {analysis(curr_animal).lever(sessions).cued_movement_trials},'uni',false)),stages,'uni',false);
+    
+    if isfield(analysis,'labels');
+        use_cells = ~analysis(curr_animal).labels.gad_cells;
+    else
+        use_cells = true(size(analysis(curr_animal).im(1).move_onset_aligned,3),1);
+    end
+    
+    
+    framerate = 28;
+    stages_activity = cellfun(@(sessions) cell2mat(cellfun(@(activity) reshape(permute( ...
+        activity(:,analysis(curr_animal).surrounding_frames > 0 & ...
+        analysis(curr_animal).surrounding_frames < framerate*(movement_use_time/1000),use_cells), ...
+        [2 3 1]),[],size(activity,1)),{analysis(curr_animal).im(sessions).move_onset_aligned}, ...
+        'uni',false)),stages,'uni',false);
+    
+    % Make template from the last (expert) stage
+    template_trials = randperm(size(stages_movement{end},2),round(size(stages_movement{end},2)/2));
+    
+    movement_template = nanmean(stages_movement{end}(:,template_trials),2);
+    activity_template = nanmean(stages_activity{end}(:,template_trials),2);
+    
+    % Get correlations between trials and templates (excluding trials used to
+    % create the templates)
+    valid_trials = cellfun(@(x) 1:size(x,2),stages_movement,'uni',false);
+    valid_trials{end}(template_trials) = [];
+    
+    stages_movement_template_corr_grid = cellfun(@(movement,trials) ...
+        corrcoef([movement_template,movement(:,trials)]),stages_movement,valid_trials,'uni',false);
+    
+    stages_activity_template_corr_grid = cellfun(@(activity,trials) ...
+        corrcoef([activity_template,activity(:,trials)],'rows','pairwise'), ...
+        stages_activity,valid_trials,'uni',false);
+    
+    stages_movement_template_corr = cellfun(@(x) x(1,2:end), ...
+        stages_movement_template_corr_grid,'uni',false);
+    
+    stages_activity_template_corr = cellfun(@(x) x(1,2:end), ...
+        stages_activity_template_corr_grid,'uni',false);
+    
+    % Bin movement correlations
+    corr_bin = [-1:0.2:1];
+    
+    corr_bin_use = [corr_bin(1:end-1) Inf];
+    corr_bin_plot = corr_bin(1:end-1) + diff(corr_bin)/2;
+    
+    [~,bin_idx] = cellfun(@(x) histc(x,corr_bin_use),stages_movement_template_corr,'uni',false);
+    bins_used = cellfun(@unique,bin_idx,'uni',false);
+    
+%     stages_activity_template_corr_mean = cellfun(@(corr,bins) grpstats(corr,bins,'mean'), ...
+%         stages_activity_template_corr,bin_idx,'uni',false);
+%     stages_activity_template_corr_sem = cellfun(@(corr,bins) grpstats(corr,bins,'sem'), ...
+%         stages_activity_template_corr,bin_idx,'uni',false);
+%     
+    
+    curr_stage_mean = repmat({nan(length(corr_bin_use),1)},1,2);
+    curr_stage_sem = repmat({nan(length(corr_bin_use),1)},1,2);
+    for curr_stage = 1:length(stages)
+       
+        curr_mean = grpstats(stages_activity_template_corr{curr_stage},bin_idx{curr_stage},'mean');
+        curr_sem = grpstats(stages_activity_template_corr{curr_stage},bin_idx{curr_stage},'sem');
+        
+        curr_stage_mean{curr_stage}(bins_used{curr_stage}) = curr_mean;
+        curr_stage_sem{curr_stage}(bins_used{curr_stage}) = curr_sem;
+        
+    end
+    
+    stages_activity_template_corr_mean(curr_animal,:) = curr_stage_mean;
+    stages_activity_template_corr_sem(curr_animal,:) = curr_stage_sem;
+    
+    disp(curr_animal);
+end
+
+
+% 
+% % Plot stages
+% figure; hold on
+% for curr_stage = 1:length(stages)
+%     errorbar(corr_bin_plot(bins_used{curr_stage}), ...
+%         stages_activity_template_corr_mean{curr_stage}, ...
+%         stages_activity_template_corr_sem{curr_stage},'color',stages_col{curr_stage});
+% end
+
+
+%% Trial-by-trial between/across sessoins
+
+stages = {[1 2] [3 4] [5 6] [7 8] [9 10] [11 12] [13 14]}; 
+
+framerate = 28;
+
+activity_corr_stages_mean = cell(length(stages),length(stages),length(analysis));
+activity_corr_stages_sem = cell(length(stages),length(stages),length(analysis));
+for curr_animal = 1:length(analysis);
+    
+    movement_start_time = 1001;
+    movement_use_time = 3000;
+    
+    % to correspond to movement
+    use_frames = analysis(curr_animal).surrounding_frames > 0 & ...
+        analysis(curr_animal).surrounding_frames < framerate*(movement_use_time/1000);
+    
+    % custom
+    %use_frames = 15:105;
+    
+    % Define trials to use
+    n_sessions = length(analysis(curr_animal).im);
+    use_sessions = arrayfun(@(x) ~isempty(analysis(curr_animal).lever(x).rewarded_movement),1:n_sessions);
+    
+    % Trial-by-trial movement correlation
+    use_movement = cellfun(@(movement,trials) cell2mat(cellfun(@(x) ...
+        x(movement_start_time:movement_start_time+movement_use_time),movement(trials),'uni',false)'), ...
+        {analysis(curr_animal).lever(use_sessions).rewarded_movement}, ...
+        {analysis(curr_animal).lever(use_sessions).cued_movement_trials},'uni',false);
+    
+    n_session_movements = cellfun(@(x) size(x,2),use_movement);
+    movement_corr = cell(n_sessions);
+    movement_corr(use_sessions,use_sessions) = ...
+        mat2cell(corrcoef(horzcat(use_movement{:})),n_session_movements,n_session_movements);
+    movement_corr(find(eye(size(movement_corr)))) = ...
+        cellfun(@(x) AP_itril(x,-1),movement_corr(find(eye(size(movement_corr)))),'uni',false);
+    movement_corr(find(~eye(size(movement_corr)))) = ...
+        cellfun(@(x) x(:),movement_corr(find(~eye(size(movement_corr)))),'uni',false);
+    
+    % Trial-by-trial activity correlation
+    use_cells = true(size(analysis(curr_animal).im(1).move_onset_aligned,3),1);
+    %use_cells = end_up_rois{curr_animal};
+    
+    use_activity = cellfun(@(activity) reshape(permute( ...
+        zscore(activity(:,use_frames,use_cells),[],2), ...
+        [2 3 1]),[],size(activity,1)), ...
+        {analysis(curr_animal).im(use_sessions).move_onset_aligned},'uni',false);
+    
+    activity_corr = cell(n_sessions);
+    activity_corr(use_sessions,use_sessions) = ...
+        mat2cell(corrcoef(horzcat(use_activity{:}),'rows','complete'),n_session_movements,n_session_movements);
+    activity_corr(find(eye(size(activity_corr)))) = ...
+        cellfun(@(x) AP_itril(x,-1),activity_corr(find(eye(size(activity_corr)))),'uni',false);
+    activity_corr(find(~eye(size(activity_corr)))) = ...
+        cellfun(@(x) x(:),activity_corr(find(~eye(size(activity_corr)))),'uni',false);
+    
+    % Bin trials by movement correlation
+    corr_bin = linspace(-1,1,20);
+    corr_bin_use = [corr_bin(1:end-1) Inf];
+    corr_bin_plot = corr_bin(1:end-1) + diff(corr_bin)/2;
+    
+    % Groups stages of learning, bin  
+    use_stages = find(cellfun(@(x) any(intersect(x,find(use_sessions))),stages));
+    
+    [~,stages_bin_idx] = cellfun(@(x) histc(x,corr_bin_use),movement_corr,'uni',false);
+        
+    curr_stage_mean = cell(length(stages));
+    curr_stage_sem = cell(length(stages));
+    for curr_stage_1 = use_stages;
+        for curr_stage_2 = use_stages
+                  
+            curr_mean = grpstats(vertcat(activity_corr{curr_stage_1,curr_stage_2}), ...
+                vertcat(stages_bin_idx{curr_stage_1,curr_stage_2}),'mean');
+            curr_sem = grpstats(vertcat(activity_corr{curr_stage_1,curr_stage_2}), ...
+                vertcat(stages_bin_idx{curr_stage_1,curr_stage_2}),'sem');
+            
+            bins_used = unique(vertcat(stages_bin_idx{curr_stage_1,curr_stage_2}));
+            bins_unused = setdiff(1:length(corr_bin),bins_used);
+            
+            curr_stage_mean{curr_stage_1,curr_stage_2}(bins_used) = curr_mean;
+            curr_stage_sem{curr_stage_1,curr_stage_2}(bins_used) = curr_sem;
+            
+            % fill in unused values with nans
+            curr_stage_mean{curr_stage_1,curr_stage_2}(bins_unused) = NaN;
+            curr_stage_sem{curr_stage_1,curr_stage_2}(bins_unused) = NaN;
+            
+        end
+    end
+    
+    activity_corr_stages_mean(:,:,curr_animal) = curr_stage_mean;
+    activity_corr_stages_sem(:,:,curr_animal) = curr_stage_sem;
+    
+    disp(curr_animal);
+    
+end
+
+% Combine animals
+activity_corr_stages_mean_animals = cell(length(stages));
+activity_corr_stages_sem_animals = cell(length(stages));
+for stage_1 = 1:length(stages)
+    for stage_2 = 1:length(stages)
+   
+        curr_mean = vertcat(activity_corr_stages_mean{stage_1,stage_2,:});
+        activity_corr_stages_mean_animals{stage_1,stage_2} = nanmean(curr_mean);
+        
+        curr_sem = vertcat(activity_corr_stages_sem{stage_1,stage_2,:});
+        activity_corr_stages_sem_animals{stage_1,stage_2} = nanmean(curr_sem);
+        
+    end
+end
+
+col1 = autumn(length(stages));
+col2 = cool(length(stages));
+figure; hold on
+for i = 1:length(stages)
+    plot(activity_corr_stages_mean_animals{1,i},'color',col1(i,:),'linewidth',2)
+    plot(activity_corr_stages_mean_animals{end,i},'color',col2(i,:),'linewidth',2)
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

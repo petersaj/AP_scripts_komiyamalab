@@ -1,0 +1,67 @@
+function peak_matrix = AP_make_peak_matrix(df_matrix,pyr_cells,gad_cells)
+% peak_matrix = AP_make_peak_matrix(df_matrix,pyr_cells_gad_cells)
+% Create a matrix of calcium events from raw df/f traces
+% Pyr cells = peak detection, gad cells = start-end thresholding 
+
+% If pyr/gad not specified, assume all are pyramidal
+if nargin == 1
+    pyr_cells = true(size(df_matrix,1),1);
+    gad_cells = ~pyr_cells;
+end
+
+% If logical, change to index
+if islogical(pyr_cells)
+    pyr_cells = find(pyr_cells);
+end
+
+if islogical(gad_cells)
+    gad_cells = find(gad_cells);
+end
+
+% Initialize peak matrix
+peak_matrix = zeros(size(df_matrix));
+
+% Pyramidal cells: peak detection
+if ~isempty(pyr_cells)
+    [peak_frames peak_amplitudes] = AP_trace_peak(df_matrix(pyr_cells,:));
+    for i = 1:length(pyr_cells)
+        if isempty(peak_frames{i})
+            continue
+        end
+        peak_matrix(pyr_cells(i),peak_frames{i}) = peak_amplitudes{i};
+    end
+end
+
+% Gad cells: thresholding, start = > 1 noise, end = < 3 noise
+if ~isempty(gad_cells)
+    df_matrix(isnan(df_matrix)) = 0;
+    for i = gad_cells
+        temp_smooth = smooth(df_matrix(i,:),30,'loess')';
+        noise_est = mean(abs(df_matrix(i,:) - temp_smooth));
+        
+        thresh_1 = temp_smooth > noise_est*1;
+        thresh_3 = temp_smooth > noise_est*3;
+        
+        % find edges of above-thresh periods
+        thresh_1_start = diff([0 thresh_1 0]) == 1;
+        thresh_3_start = find(diff([0 thresh_3 0]) == 1);
+        thresh_3_stop = find(diff([0 thresh_3 0]) == -1);
+        thresh_1_3_idx = arrayfun(@(x,y) x-find(thresh_1_start(x:-1:1),1)+1:y-1, ...
+            thresh_3_start,thresh_3_stop,'uni',false);
+        
+        thresh_1_3 = false(1,size(df_matrix,2));
+        thresh_1_3(horzcat(thresh_1_3_idx{:})) = true;
+        
+        peak_matrix(i,thresh_1_3) = df_matrix(i,thresh_1_3);
+    end
+end
+
+
+
+
+
+
+
+
+
+

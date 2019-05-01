@@ -1,0 +1,34 @@
+function corrcoef_diff = AP_affineAlign(params,im_orig,im_align);
+% align images x,y,theta
+% fix for resolution for now - later don't hardcode?
+xy_ratio = 4;
+im_orig_ratio = repmat(1:size(im_orig
+
+
+% define parameters
+dx = params(1);
+dy = params(2);
+theta = params(3);
+
+% center image and constrain output to image size
+[N M] = size(im_orig);
+
+udata = [1 N] - (N+1)/2;% input image x
+vdata = [1 M] - (M+1)/2;% input image y
+
+xdata = udata;% output image x
+ydata = vdata;% output image y
+
+% define affine transform matrix
+A = ...
+    [cos(theta) sin(theta) 0;
+    -sin(theta) cos(theta) 0;
+     dx          dy          1];
+ 
+tform_rotate = maketform('affine',A);
+
+im_align_tform = IMTRANSFORM(im_align,tform_rotate,...
+    'UData',udata,'VData',vdata,'XData',xdata,'YData',ydata);
+
+corrcoef_tform = corrcoef(im_orig,im_align_tform);
+corrcoef_diff = 1-corrcoef_tform(2);

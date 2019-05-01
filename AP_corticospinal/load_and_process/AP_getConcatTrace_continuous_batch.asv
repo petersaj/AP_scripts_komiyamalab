@@ -1,0 +1,143 @@
+function [roi_trace,roi_trace_bg] = AP_getConcatTrace_continuous_batch(roi_filename,tiff_path,interp_sub,local_comp)
+%[roi_trace,roi_trace_bg] = AP_getConcatTrace_continuous_batch(roi_filename,tiff_path,interp_sub,local_comp)
+%
+% Get fluorescence traces of ROIs (and background ROIs, if available) of
+% movies which were taken continuously. Assumes new TIFF header format
+% where frame number is logged.
+%
+% interp_sub - get fluorescence interpolated across ROIs as background
+%
+% local_comp - if being done locally, copy file to local drive temporarily
+% and load/process
+
+% Get TIFF filenames
+tiff_dir = dir([tiff_path filesep '*.tif']);
+tiff_files = sort({tiff_dir.name});
+
+% append directory to tiff filename
+tiff_filenames = cellfun(@(x) [tiff_path filesep x], ...
+    tiff_files,'UniformOutput',false);
+
+% if on local computer, create directory for temporary files
+if local_comp
+    local_dir = 'C:\Users\Andy\Documents\KomiyamaLab\data\temp_files';
+    local_filename = [local_dir filesep 'temp_img.tif'];
+    if ~isdir(local_dir)
+        mkdir(local_dir)
+    end   
+end
+
+% load ROIs
+load(roi_filename,'-MAT')
+
+% get size of frame from first frame of first file
+imageinfo=imfinfo(tiff_filenames{1},'tiff');
+M=imageinfo(1).Width;
+N=imageinfo(1).Height;
+
+% get total number of frames from the last frame of the last file
+imageinfo = imfinfo(tiff_filenames{end},'tiff');
+[img_parameter img_value] = strread( ...
+    imageinfo(end).ImageDescription,'%s %s', 'delimiter','=\n');
+frame_tag_idx = cellfun(@(x) ~isempty(strfind(x,'Frame Tag')),img_parameter);
+total_frames = str2num(img_value{frame_tag_idx});
+
+% create masks from ROIs
+cellMask = false(N*M,length(polygon.ROI));
+for n_polygon = 1:length(polygon.ROI);
+    if ~isfield(polygon,'autosort');
+        temp_mask = poly2mask(polygon.ROI{n_polygon}(:,1)',polygon.ROI{n_polygon}(:,2)',N,M);
+        cellMask(:,n_polygon) = temp_mask(:);
+    elseif isfield(polygon,'autosort');
+        temp_mask = polygon.autosort(:,:,n_polygon);
+        cellMask(:,n_polygon) = temp_mask(:);
+    end
+end
+
+% Grab mask for background ROIs, if available
+if isfield(polygon,'bgROI')
+    for n_polygon = 1:length(polygon.bgROI);
+        cellMask_bg(:,n_polygon) = polygon.bgROI_mask{n_polygon}(:);
+    end
+end
+
+% get the traces for the ROIs
+disp('Getting and concatenating traces');
+roi_trace = nan(length(polygon.ROI),total_frames);
+roi_trace_bg = nan(length(polygon.ROI),total_frames);
+
+for i = 1:length(tiff_filenames);
+        
+    % if on local computer, copy image to temporary file, otherwise load
+    if ~local_comp
+        img_filename = [tiff_filenames{i}];
+    else
+        disp('Copying image to local drive...')
+        tic
+        copyfile(tiff_filenames{i},local_filename);
+        to
+        img_filename = local_filename;
+    end
+    
+    % get traces from current tiff file
+    imageinfo=imfinfo(img_filename,'tiff');
+    numframes=length(imageinfo);
+    M=imageinfo(1).Width;
+    N=imageinfo(1).Height;
+    
+    % get number of each frame from header
+    [img_parameter img_value] = arrayfun(@(x) strread( ...
+        imageinfo(x).ImageDescription,'%s %s', 'delimiter','=\n'),1:length(imageinfo),'uni',false);
+    frame_tag_idx = cellfun(@(x) cellfun(@(x) ...
+        ~isempty(strfind(x,'Frame Tag')),x),img_parameter,'uni',false);
+    frame_tag = cellfun(@(value,idx) str2num(value{idx}),img_value,frame_tag_idx);
+    
+    im = nan(N*M,numframes);
+    
+    tic
+    disp(['Loading file (' img_filename ')']);
+    if interp_sub
+       im_interp = nan(M*N,numframes); 
+       allROI_mask = reshape(any(cellMask,2),M,N);
+    end
+    for loadframe = 1:numframes
+        im_temp = [];
+        im_temp = imread(img_filename,'tiff',loadframe,'Info',imageinfo);
+        % image: columns are frames
+        im(:,loadframe) = im_temp(:);
+        
+        % If interp_sub selected, interpolate across ROIs as background
+        if interp_sub
+            curr_frame_roi_interp = double(im_temp);
+            curr_frame_roi_interp(allROI_mask) = NaN;
+            curr_frame_roi_interp = inpaint_nans(curr_frame_roi_interp,4);
+            im_interp(:,loadframe) = curr_frame_roi_interp(:);
+        end
+    end
+    disp('Done')
+    toc
+    
+    disp(['Getting activity from file ' num2str(i) '/' num2str(length(tiff_filenames))]);
+    
+    for n_polygon = 1:size(cellMask,2)
+        % ROI trace = mean fluorescence trace in all ROI pixels
+        % Assume frame_tag is the correct frame number
+        roi_trace(n_polygon,frame_tag) = nanmean(im(cellMask(:,n_polygon),:));
+        
+        % If interp_sub selected, get traces of interpolated movie
+        if interp_sub
+            roi_trace_bg(n_polygon,frame_tag) = nanmean(im_interp(cellMask(:,n_polygon),:));
+            % If background ROIs, get traces
+        elseif isfield(polygon,'bgROI')
+            roi_trace_bg(n_polygon,frame_tag) = nanmean(im(cellMask_bg(:,n_polygon),:));
+        end
+               
+    end
+    
+    clear im
+    
+end
+
+
+disp('Finished getting ROI traces');
+

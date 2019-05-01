@@ -1,0 +1,66 @@
+    animal = animals{curr_animal};
+    
+    % find days
+    data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+    data_dir = dir(data_path);
+    data_names = {data_dir.name};
+    data_fullnames = cellfun(@(x) [data_path filesep x],data_names, ...
+        'UniformOutput',false);
+    data_isfolders = cellfun(@(x) isdir(x),data_fullnames);
+    data_folders = data_fullnames(data_isfolders);
+    data_regexp = regexp(data_folders,'\d\d\d\d\d\d');
+    data_days = data_folders(cellfun(@(x) ~isempty(x),data_regexp));
+    days = cellfun(@(x) x(end-5:end),data_days,'UniformOutput',false);
+    
+    classified_cells = {};
+    
+    for curr_day = 1:length(days)
+        
+        %%%% Load/Initialize
+        clearvars -except animal days curr_day classified_cells animal animals
+        
+        day = num2str(days{curr_day});
+        analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_bgROI'];
+        analysis_name = [day '_' animal '_bgROI_analysis.mat'];
+        load([analysis_path filesep analysis_name]);
+        
+        data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+        
+        
+        % get behavior file
+        dir_currfolder = dir([data_path filesep day]);
+        dir_filenames = {dir_currfolder.name};
+        bhv_file = strncmp('data_@',dir_filenames,6);
+        bhv_filename = cell2mat((dir_filenames(bhv_file == 1)));
+        
+        % get xsg files
+        xsg_folder = [data_path filesep day filesep 'AP00' animal(3:4)];
+        xsg_dir = dir([xsg_folder filesep '*.xsg']);
+        xsg_filenames = {xsg_dir.name};
+        xsg_filenames = sort(xsg_filenames);
+        xsg_fullfilenames = cellfun(@(x) [xsg_folder filesep x],xsg_filenames, ...
+            'UniformOutput',false);
+        
+        % get behavior data and xsg sample rate
+        try
+            % ignore if something's wrong with datafile (usually, >1 of them)
+            warning off
+            load([data_path filesep day filesep bhv_filename],'-MAT');
+            warning on
+        catch me
+            error('Problem with behavior file')
+        end
+        raw_bhv = saved_history.ProtocolsSection_parsed_events;
+        num_trials = length(raw_bhv);
+        
+        % load labels file
+        label_path = ['/usr/local/lab/People/Andy/Data/' animal filesep ...
+            animal '_roi_template'];
+        labels_name = [animal '_roilabels.roilabel'];
+        load([label_path filesep labels_name],'-MAT');
+        
+        % get cell labels
+        cells = 1:size(im.roi_trace_df,1);
+        gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+        pyr_cells = cells(~ismember(cells,gad_cells));
+        contaminated = find(cellfun(@(x) any(strcmp('contaminated',x)),roi_labels));

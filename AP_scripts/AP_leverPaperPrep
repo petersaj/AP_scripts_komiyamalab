@@ -1,0 +1,78 @@
+%% Plot average movement v quiescent activity
+
+% separate movement traces into movement epochs
+move_starts = cellfun(@(x) find(diff([0 x 0]) == 1),movement_trace_all,'uni',false);
+move_stops = cellfun(@(x) find(diff([0 x 0]) == -1),movement_trace_all,'uni',false);
+
+move_epoch_frames = cellfun(@(x,y) ...
+    arrayfun(@(z) x(z):y(z),1:length(x),'uni',false), ...
+    move_starts,move_stops,'uni',false);
+
+still_epoch_frames = cellfun(@(x,y) ...
+    arrayfun(@(z) x(z):y(z+1),1:length(x)-1,'uni',false), ...
+    move_stops,move_starts,'uni',false);
+
+movement_activity = cell(8,15);
+still_activity = cell(8,15);
+for curr_animal = 1:8
+    sessions = find(cellfun(@(x) ~isempty(x), pyr_class_all(curr_animal,:)));
+    for curr_session = sessions
+        
+        % get movement activity
+        move_time_frames = cellfun(@(x) x, ...
+            move_epoch_frames{curr_animal,curr_session},'uni',false);
+        still_time_frames = cellfun(@(x) x, ...
+            still_epoch_frames{curr_animal,curr_session},'uni',false);
+
+        curr_move_activity = cellfun(@(x) ...
+            pyr_activity_all{curr_animal,curr_session}(:,x), ...
+            move_time_frames,'uni',false);
+        
+        curr_still_activity = cellfun(@(x) ...
+            pyr_activity_all{curr_animal,curr_session}(:,x), ...
+            still_time_frames,'uni',false);
+
+        cat_move_activity = horzcat(curr_move_activity{:});
+        cat_still_activity = horzcat(curr_still_activity{:});
+        % sometimes have nans, make those zero
+                    
+        movement_activity{curr_animal,curr_session} = nanmean(cat_move_activity,2);
+        still_activity{curr_animal,curr_session} = nanmean(cat_still_activity,2);
+        
+    end
+end
+
+% plot movement and quiescent activity over days
+use_animals = [1 2 4 5 6 7 8];
+movement_activity_cat = cell(14,1);
+still_activity_cat = cell(14,1);
+for i = 1:14
+   movement_activity_cat{i} = vertcat(movement_activity{use_animals,i}); 
+   still_activity_cat{i} = vertcat(still_activity{use_animals,i});     
+end
+mm = cellfun(@nanmean,movement_activity_cat);
+ms = cellfun(@(x) nanstd(x)/sqrt(sum(~isnan(x))),movement_activity_cat);
+sm = cellfun(@nanmean,still_activity_cat);
+ss = cellfun(@(x) nanstd(x)/sqrt(sum(~isnan(x))),still_activity_cat);
+figure; hold on
+errorbar(mm,ms,'k','linewidth',2)
+errorbar(sm,ss,'r','linewidth',2)
+xlabel('Sessions')
+ylabel('Average activity')
+legend({'Movement','Quiescence'})
+
+% cat all, bar movement and quiescent activity
+use_animals = [1 2 4 5 6 7 8];
+movement_activity_cat = vertcat(movement_activity{use_animals,1:14}); 
+still_activity_cat = vertcat(still_activity{use_animals,1:14});     
+mm = nanmean(movement_activity_cat);
+ms = nanstd(movement_activity_cat)/sqrt(sum(~isnan(movement_activity_cat)));
+sm = nanmean(still_activity_cat);
+ss = nanstd(still_activity_cat)/sqrt(sum(~isnan(still_activity_cat)));
+figure; hold on
+bar([mm sm],'FaceColor','w','linewidth',2,'BarWidth',0.5);
+errorbar([mm sm],[ms ss],'.k','linewidth',2)
+xlim([0 3])
+set(gca,'XTick',1:2);
+set(gca,'XTickLabel',{'Moving' 'Quiescent'})
+ylabel('Average activity')

@@ -1,0 +1,22 @@
+
+if ~exist('filename')
+    [filename,path]=uigetfile('*.tif','pick your tif file');
+else
+    path='../';
+end
+
+fullfilename=[path filename];
+imageinfo=imfinfo(fullfilename,'tiff');
+numframes=length(imageinfo);
+M=imageinfo(1).Width;
+N=imageinfo(1).Height;
+
+
+frameone=imread(fullfilename,'tiff',1);
+
+figure(1);
+clf;
+imagesc(frameone);
+axis equal;
+colormap gray;
+

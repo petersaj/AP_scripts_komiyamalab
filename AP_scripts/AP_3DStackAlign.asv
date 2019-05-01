@@ -1,0 +1,115 @@
+% Align stack to single slice
+
+% pick original image (single slice)
+[orig_file orig_path] = uigetfile('*.tif','Pick original image');
+
+% pick stack image (multiple slices)
+[stack_file stack_path] = uigetfile('*.tif','Pick stack to align');
+
+% load in original image
+im_orig = double(imread([orig_path orig_file],'tiff'));
+
+% load in stack
+stack_info = imfinfo([stack_path stack_file],'tiff');
+M=stack_info(1).Width;
+N=stack_info(1).Height;
+stack_num = length(stack_info);
+im_stack = zeros(N,M,stack_num);
+for i = 1:stack_num
+    im_stack(:,:,i) = double(imread([stack_path stack_file],'tiff',i));
+end    
+
+% input parameters and minimize 1-corrcoef
+align_fun = zeros(stack_num,1);
+estimates = zeros(stack_num,2);
+
+w = waitbar(0,'Aligning stack to original')
+for j = 1:stack_num
+    im_align_z = im_stack(:,:,j);
+    starting = [0 0]; % dx dy
+    options = optimset('Algorithm','interior-point');
+    lb = [-50 -15];
+    ub = [50 15];
+    [estimates(j,:) align_fun(j)] = fmincon(@(x) AP_3DaffineAlign(x,im_orig,im_align_z),starting,[],[],[],[],lb,ub,[],options);
+    waitbar(j/stack_num,w,'Aligning stack to original');
+end
+close(w);
+
+
+%%
+% Align stack to single slice
+
+% pick original image (single slice)
+[orig_file orig_path] = uigetfile('*.tif','Pick original image');
+
+% pick stack image (multiple slices)
+[stack_file stack_path] = uigetfile('*.tif','Pick stack to align');
+
+% load in original image
+im_orig = double(imread([orig_path orig_file],'tiff'));
+
+% load in stack
+stack_info = imfinfo([stack_path stack_file],'tiff');
+M=stack_info(1).Width;
+N=stack_info(1).Height;
+stack_num = length(stack_info);
+im_stack = zeros(N,M,stack_num);
+for i = 1:stack_num
+    im_stack(:,:,i) = double(imread([stack_path stack_file],'tiff',i));
+end    
+
+dx = zeros(stack_num,1);
+dy = zeros(stack_num,1);
+
+% input parameters and minimize 1-corrcoef
+align_fun = zeros(stack_num,1);
+estimates = zeros(stack_num,2);
+corrcoef_diff = zeros(stack_num,1);
+
+w = waitbar(0,'Aligning stack to original')
+for j = 1:stack_num
+    im_align_z = im_stack(:,:,j);
+    
+    cc = normxcorr2(im_orig,im_align_z);
+    [max_cc, imax] = max(abs(cc(:)));
+    [estimates(j,2), estimates(j,1)] = ind2sub(size(cc),imax(1));
+    
+    [N M] = size(im_orig);
+    
+    dx(j) = estimates(j,1) - M;
+    dy(j) = estimates(j,2) - N;
+    
+    % transform image to get correlation
+    % center image and constrain output to image size
+    
+    udata = [1 N] - (N+1)/2;% input image x
+    vdata = [1 M] - (M+1)/2;% input image y
+    
+    xdata = udata;% output image x
+    ydata = vdata;% output image y
+    
+    % define affine transform matrix
+    A = ...
+        [1 0 0;
+        0 1 0;
+        dx dy 1];
+    
+    tform_translate = maketform('affine',A);
+    
+    % transform image
+    im_align_tform = imtransform(im_align_z,tform_translate,...
+        'UData',udata,'VData',vdata,'XData',xdata,'YData',ydata);
+    
+    % get 1-correlation of image (function to minimize, ideally 0)
+    corrcoef_tform = corrcoef(im_orig,im_align_tform);
+    corrcoef_diff(j,1) = corrcoef_tform(2);
+    
+    waitbar(j/stack_num,w,'Aligning stack to original');
+end
+close(w);
+
+
+
+
+
+

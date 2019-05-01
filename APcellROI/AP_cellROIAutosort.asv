@@ -1,0 +1,44 @@
+%% create average image
+
+imageinfo=imfinfo(tiff_fullfilename,'tiff');
+    numframes=length(imageinfo);
+    M=imageinfo(1).Width;
+    N=imageinfo(1).Height;
+    f0 = zeros(N,M);
+    w = waitbar(0,'Creating Average');
+    for frame = 1:numframes;
+        im_s(:,:) = double(imread([tiff_fullfilename],'tiff',frame));
+        f0(:,:) = f0 + im_s./numframes;
+        waitbar(frame/numframes,w,'Creating Average');
+    end
+    close(w);
+    
+ %% Mukamel autosort
+
+[fn_path fn_file fn_ext] = fileparts(tiff_fullfilename);
+fn = tiff_fullfilename
+outputdir = fn_path;
+
+[mixedsig, mixedfilters, CovEvals, covtrace, movm, movtm] = CellsortPCA(fn, [], nPCs, [], outputdir, []);
+% if you want to manually choose PCs
+%[PCuse] = CellsortChoosePCs(fn,mixedfilters);
+PCuse = 1:nPCs;
+% if you want to plot PC spectrum
+%CellsortPlotPCspectrum(fn,CovEvals,PCuse)
+nIC = length(PCuse);
+[ica_sig,ica_filters,ica_A,numiter] = CellsortICA(mixedsig,mixedfilters,CovEvals,PCuse,mu,nIC,[],termtol,maxrounds);
+disp_mode = 'series';
+tlims = [0 600]; %look up
+ratebin = 1;
+plottype = 1; % cellular signals only
+ICuse = 1:nIC;
+spt = [];
+spc = [];
+% if you want to plot all ICA traces
+%CellsortICAplot(disp_mode,ica_filters,ica_sig,f0,tlims,dt,ratebin,plottype,ICuse,spt,spc)
+plotting = 1; % show filters
+[ica_segments,segmentlabel,segcentroid] = CellsortSegmentation(ica_filters,smwidth,thresh,arealims,plotting);
+% if you want to plot all segmented(?) traces
+%CellsortICAplot(disp_mode,ica_segments,ica_sig,f0,tlims,dt,ratebin,plottype,ICuse,spt,spc)
+
+[spmat,spt,spc] = CellsortFindSpikes(ica_sig,thresh,dt,deconvtau,normalization)

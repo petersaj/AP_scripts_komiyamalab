@@ -1,0 +1,221 @@
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+all_corrcoef = nan(8,15);
+all_dot = nan(8,15);
+all_mean_dot = cell(8,15);
+
+for curr_animal = 1:length(animals)
+    clearvars -except all_corrcoef all_dot all_mean_dot animals curr_animal
+    
+    animal = animals{curr_animal};  
+    
+    % load labels file
+    label_path = ['/usr/local/lab/People/Andy/Data/' animal filesep ...
+        animal '_roi_template'];
+    labels_name = [animal '_roilabels.roilabel'];
+    load([label_path filesep labels_name],'-MAT');
+    
+    % get cell labels
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels));
+    
+    pyr_unfilled = setdiff(pyr_cells,filled_cells);
+    gad_unfilled = setdiff(gad_cells,filled_cells);
+    
+    % load ROIs and get ROI centroids and distances
+    roi_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_bgROI'];
+    roi_dir = dir(roi_path);
+    roi_filenames = {roi_dir(:).name};
+    roi_files = cellfun(@(x) any(strfind(x,'.roi')),roi_filenames);
+    roi_files_sort = sort(roi_filenames(roi_files));
+    load([roi_path filesep roi_files_sort{end}],'-MAT');
+    num_rois = length(polygon.ROI);
+    roi_center_x = zeros(num_rois,1);
+    roi_center_y = zeros(num_rois,1);
+    for curr_roi  = 1:num_rois
+        [area roi_center_x(curr_roi) roi_center_y(curr_roi)] = ...
+            polycenter(polygon.ROI{curr_roi}(:,1),polygon.ROI{curr_roi}(:,2));
+    end
+    roi_dist = nan(length(roi_center_x));
+    for k = 1:length(roi_dist)
+        for j = 1:length(roi_dist)
+            curr_dist = sqrt((roi_center_x(k) - roi_center_x(j))^2 + ...
+                (roi_center_y(k) - roi_center_y(j))^2);
+            roi_dist(k,j) = curr_dist;
+        end
+    end
+    
+    % load behavioral classification
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    
+    % find days
+    data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+    data_dir = dir(data_path);
+    data_names = {data_dir.name};
+    data_fullnames = cellfun(@(x) [data_path filesep x],data_names, ...
+        'UniformOutput',false);
+    data_isfolders = cellfun(@(x) isdir(x),data_fullnames);
+    data_folders = data_fullnames(data_isfolders);
+    data_regexp = regexp(data_folders,'\d\d\d\d\d\d');
+    data_days = data_folders(cellfun(@(x) ~isempty(x),data_regexp));
+    days = cellfun(@(x) x(end-5:end),data_days,'UniformOutput',false);
+    
+    for curr_day = 1:length(days)
+        
+        %%%% Load/Initialize
+        
+        day = num2str(days{curr_day});
+        analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_bgROI'];
+        analysis_name = [day '_' animal '_bgROI_analysis.mat'];
+        load([analysis_path filesep analysis_name]);
+        
+        data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+        
+        
+        % get behavior file
+        dir_currfolder = dir([data_path filesep day]);
+        dir_filenames = {dir_currfolder.name};
+        bhv_file = strncmp('data_@',dir_filenames,6);
+        bhv_filename = cell2mat((dir_filenames(bhv_file == 1)));
+        
+        % get xsg files
+        xsg_folder = [data_path filesep day filesep 'AP00' animal(3:4)];
+        xsg_dir = dir([xsg_folder filesep '*.xsg']);
+        xsg_filenames = {xsg_dir.name};
+        xsg_filenames = sort(xsg_filenames);
+        xsg_fullfilenames = cellfun(@(x) [xsg_folder filesep x],xsg_filenames, ...
+            'UniformOutput',false);
+        
+        %     % get behavior data and xsg sample rate
+        %     try
+        %         % ignore if something's wrong with datafile (usually, >1 of them)
+        %         warning off
+        %         load([data_path filesep day filesep bhv_filename],'-MAT');
+        %         warning on
+        %     catch me
+        %         error('Problem with behavior file')
+        %     end
+        %     raw_bhv = saved_history.ProtocolsSection_parsed_events;
+        %     num_trials = length(raw_bhv);
+        
+        %%%
+        % From here on out this got a little hijacked
+        %%%
+        
+        clear curr_move_cells a b a_blur b_blur a_blur_norm b_blur_norm
+        
+        curr_move_cells = classified_cells.move_cells_peak{curr_day};
+        
+        a = [0;abs(diff(bhv.lever_force_resample))];
+        b = sum(im.roi_concat_oopsi(intersect(pyr_unfilled,find(curr_move_cells)),:));
+        c = im.roi_concat_oopsi(intersect(pyr_unfilled,find(curr_move_cells)),:);
+        
+        blur_filter = fspecial('gaussian',[1 20],1);
+        a_blur = conv(a,blur_filter,'same');
+        b_blur = conv(b,blur_filter,'same');
+        c_blur = conv2(c,blur_filter,'same');
+        
+        curr_corrcoef = corrcoef(a_blur,b_blur);
+        
+        a_blur_norm = a_blur/sqrt(sum(a_blur.^2));
+        b_blur_norm = b_blur/sqrt(sum(b_blur.^2));
+        c_blur_norm = bsxfun(@times,c_blur,1./sqrt(sum(c_blur.^2,2)));
+        
+        all_dot(curr_animal,curr_day) = a_blur_norm'*b_blur_norm';
+        all_corrcoef(curr_animal,curr_day) = curr_corrcoef(2);
+        all_mean_dot{curr_animal,curr_day} = c_blur_norm*a_blur_norm;
+        
+        disp(curr_day)
+    end
+    disp(['Finished ' animal])
+end
+
+all_mean_dot_concat = cell(1,14);
+for i = 1:14
+   all_mean_dot_concat{i} = vertcat(all_mean_dot{:,i});    
+end
+    
+
+
+
+%% Get the "energy" from the paper
+
+peak_matrix = AP_caEvents(im.roi_trace_df,pyr_unfilled,[]);
+spread_frames = ones(1,90);
+peak_spread = conv2(peak_matrix(pyr_unfilled,:),spread_frames);
+peak_spread = peak_spread(:,1:size(im.roi_trace_df,2));
+
+% get the energy from the paper
+curr_cells = pyr_unfilled;
+curr_roi_dist = roi_dist(curr_cells,curr_cells);
+roi_dist_unique = AP_itril(curr_roi_dist,-1);
+Jnorm = sum(1./roi_dist_unique);
+Eg = nan(1,size(peak_spread,2));
+Eg_hat = nan(1,size(peak_spread,2));
+for i = 1:size(peak_spread,2);
+    FiFj_all = peak_spread(:,i) * ...
+        peak_spread(:,i)';
+    FiFj = AP_itril(FiFj_all,-1);
+    Jij = (1./roi_dist_unique)/Jnorm;
+    Eg(i) = -FiFj'*Jij;
+    Eg_hat(i) = -mean(FiFj);    
+    i
+end
+delta_Eg = Eg - Eg_hat;
+
+% get shuffled values
+
+num_shuff = 1000;
+prctile_shuffs = round(0.05*num_shuff);
+delta_Eg_95 = -inf(prctile_shuffs,size(im.roi_trace_df,2));
+delta_Eg_5 = inf(prctile_shuffs,size(im.roi_trace_df,2));
+
+disp('Getting shuffled')
+for shuff = 1:num_shuff
+    tic
+    roi_dist_shuffle = AP_itril(curr_roi_dist,-1);
+    roi_dist_shuffle = roi_dist_shuffle(randperm(length(roi_dist_shuffle)));
+    Eg_shuffle = nan(1,size(peak_spread,2));
+    Eg_hat_shuffle = nan(1,size(peak_spread,2));
+    for i = 1:size(peak_spread,2);
+        FiFj_all = peak_spread(:,i) * ...
+            peak_spread(:,i)';
+        FiFj = AP_itril(FiFj_all,-1);
+        Jij = (1./roi_dist_shuffle)/Jnorm;
+        Eg_shuffle(i) = -FiFj'*Jij;
+        Eg_hat_shuffle(i) = -mean(FiFj);
+    end
+    delta_Eg_shuffle = Eg_shuffle - Eg_hat_shuffle;
+    
+    delta_Eg_95 = sort([delta_Eg_shuffle;delta_Eg_95],'descend');
+    delta_Eg_95 = delta_Eg_95(1:prctile_shuffs,:);
+    
+    delta_Eg_5 = sort([delta_Eg_shuffle;delta_Eg_5],'ascend');
+    delta_Eg_5 = delta_Eg_5(1:prctile_shuffs,:);
+    shuff
+    toc
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

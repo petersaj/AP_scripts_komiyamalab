@@ -1,0 +1,39 @@
+function [peak_frame,peak_amplitude] = AP_schmittTrigger(v, delta, peak_back, local_max, trace_std)
+
+% function finds first peak that satisfies schmitt trigger criterion
+
+% v is vector to detect next peak
+% delta is minimum difference required, can be vector of any length
+% peak_back is how many frames ago the first jump had to occur within
+% local_max is finding the peak point within this many points in front
+
+for i = 1+peak_back:length(v)-length(delta)-1;
+    
+    % find where vector goes above critera within 5 frames
+    prior_frames = v(i-peak_back:i-1);
+    prior_frames_diff = v(i) - prior_frames;
+    prior_min = find(prior_frames_diff == max(prior_frames_diff),1);
+    prior_min = (peak_back+1) - prior_min; % prior_min gives minimum in frames back
+    
+    % !!!I'm changing this to be more strict: has to be schmitt trigger
+    % above trace_std, not above most recent minimum since too much false p
+    
+    if any(prior_frames_diff > delta(1));
+        if all(v(i:i+length(delta)-1) > (delta + trace_std)) && ...
+                i+local_max <= length(v);
+            peak_frame = find(v == max(v(i:i+local_max)),1); % this needs 
+            % to be 1, in case there are multiples of the same as 
+            % is the case with fixing large artifacts to 0
+            peak_amplitude = max(max(v(i:i+local_max) - v(i-prior_min)));
+            break
+        else
+            peak_frame = [];
+            peak_amplitude = [];
+        end
+    else
+        peak_frame = [];
+        peak_amplitude = [];
+    end
+end
+
+

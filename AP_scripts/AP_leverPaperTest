@@ -1,0 +1,983 @@
+%% get mean population activity over days for classification
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    load([animal '_classified_cells.mat']);
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];    
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    
+    %concat_peaks = [peak_matrix_full{curr_animal}{:}];
+    %box_filter = ones(1,10000);
+    %concat_peaks_spread = conv2(concat_peaks,box_filter,'same');
+    concat_peaks_spread = concat_peaks_10000{curr_animal};
+    
+    % do all the following for pyr and gad
+    for curr_cell_type = 1:1;
+        
+        if curr_cell_type == 1
+            cell_type = 'pyr';
+            curr_cells = pyr_cells;
+        elseif curr_cell_type == 2;
+            cell_type = 'gad';
+            curr_cells = gad_cells;
+        end
+        
+        concat_peaks_downsamp = concat_peaks_spread(curr_cells,1:1000:end);
+        
+        % normalize each row by the max
+        concat_peaks_downsamp_norm = bsxfun(@times,concat_peaks_downsamp, ...
+            1./max(concat_peaks_downsamp,[],2));
+        concat_peaks_downsamp_norm(isnan(concat_peaks_downsamp_norm)) = 0;
+        
+%         concat_peaks_downsamp_norm = bsxfun(@times,concat_peaks_downsamp, ...
+%             1./sqrt(sum(concat_peaks_downsamp.^2,2)));
+%         concat_peaks_downsamp_norm(isnan(concat_peaks_downsamp_norm)) = 0;
+        
+        concat_peaks_downsamp = concat_peaks_downsamp_norm;
+        
+        day_length = cellfun(@(x) size(x,2)/1000, peak_matrix_full{curr_animal});
+        day_length_sum = cumsum(day_length);
+        
+        if curr_animal == 1;
+            concat_peaks_downsamp(:,1:day_length_sum(2)) = 0;
+        end
+        
+        % kmeans sort traces
+        kidx = kmeans(concat_peaks_downsamp,10);
+        [temp sort_idx] = sort(kidx);
+%         figure;imagesc(concat_peaks_downsamp(sort_idx,:));colormap(gray);
+%         for i = 1:length(day_length_sum);
+%             line([day_length_sum(i) day_length_sum(i)],ylim,'color','b','linewidth',2);
+%         end
+%         title('kmeans sorted')
+        
+        % condense activity to days
+        day_bounds = [1 day_length_sum];
+        concat_peaks_daily = zeros(size(concat_peaks_downsamp,1),length(day_length));
+        for i = 1:length(day_bounds)-1
+            concat_peaks_daily(:,i) = nanmean(concat_peaks_downsamp( ...
+                :,day_bounds(i):day_bounds(i+1)),2);
+        end
+
+        % get the max of the mean activity in each sorted group
+        [temp kmeans_peak_activity] = max(grpstats(concat_peaks_daily,kidx),[],2);
+        mean_kmeans = mean(grpstats(concat_peaks_daily,kidx),2);
+        
+        temp = nanmax([classified_cells.cue_max_xcorr{:}],[],2);
+        a = grpstats(temp(pyr_cells),kidx);
+        temp2 = nanmax([classified_cells.reward_max_xcorr{:}],[],2);
+        b = grpstats(temp2(pyr_cells),kidx);
+        scatter3(kmeans_peak_activity,a/max(a),b/max(b),mean_kmeans*100);
+    end
+    animal
+end
+
+%% Get correlation between movement/quiescence over days
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+all_corr = cell(size(animals));
+scoresum.moving = cell(size(animals));
+scoresum.quiescent = cell(size(animals));
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    load([animal '_classified_cells.mat']);
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    
+    curr_corr_all = cellfun(@(x,y) corrcoef(x,y),classified_cells.movement_max_xcorr, ...
+        classified_cells.quiescent_max_xcorr,'uni',false);
+    %     curr_corr_all = cellfun(@(x,y) corrcoef(x,y),classified_cells.cue_max_xcorr, ...
+    %         classified_cells.reward_max_xcorr,'uni',false);
+    
+    curr_corr = cellfun(@(x) x(2), curr_corr_all);
+    all_corr{curr_animal} = nan(1,15);
+    all_corr{curr_animal}(1:length(curr_corr)) = curr_corr;
+    
+    scoresum.moving{curr_animal} = nan(1,15);
+    scoresum.moving{curr_animal}(1:length(curr_corr)) = ...
+        cellfun(@median,classified_cells.movement_max_xcorr);
+    
+    scoresum.quiescent{curr_animal} = nan(1,15);
+    scoresum.quiescent{curr_animal}(1:length(curr_corr)) = ...
+        cellfun(@median,classified_cells.quiescent_max_xcorr);
+    
+    scoresum.movingcells{curr_animal} =nan(1,15);
+    scoresum.movingcells{curr_animal}(1:length(curr_corr)) = cellfun(@(x,y) ...
+        mean(x > y), classified_cells.movement_max_xcorr, ...
+        classified_cells.quiescent_max_xcorr);
+    
+    scoresum.quiescentcells{curr_animal} =nan(1,15);
+    scoresum.quiescentcells{curr_animal}(1:length(curr_corr)) = cellfun(@(x,y) ...
+        mean(x < y), classified_cells.movement_max_xcorr, ...
+        classified_cells.quiescent_max_xcorr);
+        
+    
+end
+% delete AP71 day 1,2
+all_corr{1}(1:2) = NaN;
+scoresum.moving{1}(1:2) = NaN;
+scoresum.quiescent{1}(1:2) = NaN;
+
+%% get the corrcoef matrix of mean lever presses for days
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+cc_grid = nan(15,15,length(animals));
+for curr_animal = 1:length(animals)
+    
+    lever_filename = [animals{curr_animal} 'lever_params.mat'];
+    load(lever_filename);
+    
+    a = cellfun(@(x,y) [x{y}],grab_var.rewarded_lever_force_fixtime ...
+        (1:length(grab_var.cued_movement)), ...
+        grab_var.cued_movement,'uni',false);
+    b = cell2mat(cellfun(@(x) nanmedian(x,2),a,'uni',false));
+    b_cc = corrcoef(b);
+    
+    cc_grid(1:length(b_cc),1:length(b_cc),curr_animal) = b_cc;
+    
+end
+
+
+
+%% get population correlation matrix for binary classified cells
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+movement_corr = nan(15,15,length(animals));
+move_cells = nan(length(animals),15);
+quiescent_corr = nan(15,15,length(animals));
+still_cells = nan(length(animals),15);
+
+movestill_corr = nan(15,15,length(animals));
+
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    load([animal '_classified_cells_move_epoch_shuffle.mat']);
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    curr_cells = setdiff(pyr_cells,filled_cells);
+    
+    curr_move = vertcat(classified_cells.move_cells_peak{:});%.* ...
+        %horzcat(classified_cells.move_deconv_peak{:})';
+%     curr_move_norm = bsxfun(@times,curr_move,1./max(curr_move));
+%     curr_move_norm(isnan(curr_move_norm)) = 0;
+    curr_move_cc = corrcoef(curr_move(:,curr_cells)');
+        %(+curr_move(:,curr_cells)*+curr_move(:,curr_cells)')/length(curr_cells);
+        %(%*2./ ...
+        %(repmat(sum(curr_move(:,curr_cells),2),1,size(curr_move,1)) + ...
+        %repmat(sum(curr_move(:,curr_cells),2)',size(curr_move,1),1));
+        
+        %corrcoef(curr_move(:,curr_cells)');%...
+    movement_corr(1:size(curr_move,1),1:size(curr_move,1),curr_animal) = ...
+        curr_move_cc;
+    move_cells(curr_animal,1:size(curr_move,1)) = mean(curr_move(:,curr_cells),2);
+    
+    curr_still = vertcat(classified_cells.still_cells_peak{:});%.* ...
+        %horzcat(classified_cells.still_deconv_peak{:})';
+    curr_still_cc = (+curr_still(:,curr_cells)*+curr_still(:,curr_cells)')/length(curr_cells);
+        %(+curr_still(:,curr_cells)*+curr_still(:,curr_cells)')/length(curr_cells);%*2./ ...
+        %(repmat(sum(curr_still(:,curr_cells),2),1,size(curr_still,1)) + ...
+        %repmat(sum(curr_still(:,curr_cells),2)',size(curr_still,1),1));
+        
+        %corrcoef(curr_still(:,curr_cells)')
+    quiescent_corr(1:size(curr_still,1),1:size(curr_still,1),curr_animal) = ...
+        curr_still_cc;
+    still_cells(curr_animal,1:size(curr_still,1)) = mean(curr_still(:,curr_cells),2);
+    
+    curr_movestill_cc = +curr_move(:,curr_cells)*+curr_still(:,curr_cells)';
+    movestill_corr(1:size(curr_move,1),1:size(curr_move,1),curr_animal) = ...
+        curr_movestill_cc;
+    
+end
+% % Input zeros for AP71 day 1,2
+% movement_corr(1:2,:,1) = NaN;
+% movement_corr(:,1:2,1) = NaN;
+% quiescent_corr(1:2,:,1) = NaN;
+% quiescent_corr(:,1:2,1) = NaN;
+% movestill_corr(1:2,:,1) = NaN;
+% movestill_corr(:,1:2,1) = NaN;
+% move_cells(1,1:2) = NaN;
+% still_cells(1,1:2) = NaN;
+
+%% get fractions/overlap of classified cells
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+all_dot = nan(15,15,8);
+all_frac = nan(length(animals),15);
+all_frac_overlap = nan(15,15,length(animals));
+figure;
+for curr_animal = 2:length(animals)
+    animal = animals{curr_animal};
+    classification_path = '/usr/local/lab/People/Andy/Data/Analysis/bhv_classification';
+    load([classification_path filesep animal '_classified_cells_move_epoch_shuffle.mat']);
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    curr_cells = setdiff(pyr_cells,filled_cells);
+    clear curr_move curr_still
+    curr_move = vertcat(classified_cells.move_cells_peak{:});
+    curr_still = vertcat(classified_cells.still_cells_oopsi{:})';
+%     subplot(3,3,curr_animal);imagesc(curr_move(:,curr_cells));colormap(gray)
+    if curr_animal == 1
+        curr_move = [nan(2,size(curr_move,2));curr_move];
+        curr_still = [nan(2,size(curr_move,2));curr_move];
+    end
+    
+    temp = horzcat(classified_cells.move_deconv_peak{:})';
+    a = temp(:,curr_cells);
+    kidx = kmeans(a',5,'EmptyAction','drop');
+    [aseresaf sort_idx] = sort(kidx);
+    subplot(3,3,curr_animal);imagesc(a(:,sort_idx));colormap(gray)
+    
+    curr_frac = sum(curr_move(:,curr_cells),2)/length(curr_cells);
+    curr_dot = (+curr_move(:,curr_cells)*+curr_move(:,curr_cells)')/length(curr_cells);
+    
+    all_frac(curr_animal,1:length(curr_frac)) = curr_frac;
+    %all_dot(1:length(curr_frac),1:length(curr_frac),curr_animal) = curr_dot;
+    all_dot(1:length(curr_frac),1:length(curr_frac),curr_animal) = ...
+        corrcoef(curr_move');
+    
+    curr_overlap = (+curr_move(:,curr_cells)*+curr_move(:,curr_cells)')/length(curr_cells);
+    %curr_overlap(logical(eye(size(curr_overlap)))) = NaN;
+    all_frac_overlap(1:length(curr_frac),1:length(curr_frac),curr_animal) = curr_overlap;
+        
+    
+end
+
+
+
+%% get trial-by-trial pyr/gad correlation
+
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+daily_pyr_gad_corr = cell(size(animals));
+daily_pyr_gad_corr_slope = cell(size(animals));
+
+all_pyr_gad_corr = cell(size(animals));
+all_pyr_gad_corr_slope = nan(size(animals));
+
+total_concat_pyr_act = [];
+total_concat_gad_act = [];
+
+for i = 1:8
+    animal = animals{i};
+       
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];    
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    % load ROIs and get ROI centroids and distances
+    roi_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_bgROI'];
+    roi_dir = dir(roi_path);
+    roi_filenames = {roi_dir(:).name};
+    roi_files = cellfun(@(x) any(strfind(x,'.roi')),roi_filenames);
+    roi_files_sort = sort(roi_filenames(roi_files));
+    load([roi_path filesep roi_files_sort{end}],'-MAT');
+    num_rois = length(polygon.ROI);
+    roi_center_x = zeros(num_rois,1);
+    roi_center_y = zeros(num_rois,1);
+    for curr_roi  = 1:num_rois
+        [area roi_center_x(curr_roi) roi_center_y(curr_roi)] = ...
+            polycenter(polygon.ROI{curr_roi}(:,1),polygon.ROI{curr_roi}(:,2));
+    end
+    roi_dist = nan(length(roi_center_x));
+    for k = 1:length(roi_dist)
+        for j = 1:length(roi_dist)
+            curr_dist = sqrt((roi_center_x(k) - roi_center_x(j))^2 + ...
+                (roi_center_y(k) - roi_center_y(j))^2);
+            roi_dist(k,j) = curr_dist;
+        end
+    end
+    
+    % pick max/peak as measure of activity
+    curr_measure = cell_trial_peak_full{i};
+    
+    % for AP71 exclude first two days
+    if i == 1;
+       curr_measure.cued.moving{1} = nan(size(curr_measure.cued.moving{1}));
+       curr_measure.cued.moving{2} = nan(size(curr_measure.cued.moving{2}));
+    end
+    
+    pyr_unfilled = setdiff(pyr_cells,filled_cells);
+    pyr_act = cellfun(@(x) x(pyr_unfilled,:),curr_measure.cued.moving,'uni',false);
+    pyr_act_cat = horzcat(pyr_act{:});
+    
+    gad_unfilled = setdiff(gad_cells,filled_cells);
+    gad_act = cellfun(@(x) x(gad_unfilled,:),curr_measure.cued.moving,'uni',false);
+    gad_act_cat = horzcat(gad_act{:});
+         
+    % prepare bins for fractions of cells active
+    binedge = [0:0.01:1];
+    
+    daily_pyr_gad_corr{i} = cell(size(pyr_act));
+    
+    day_start = 1;
+    if i == 1;
+        day_start = 3;
+    end
+    
+    daily_pyr_gad_corr_slope{i} = nan(size(pyr_act));
+    for curr_day = day_start:length(pyr_act);
+        clear day_frac_activity_means day_frac_activity_sems
+        curr_pyr_act = sum(pyr_act{curr_day})/length(pyr_unfilled);
+        curr_gad_act = sum(gad_act{curr_day})/length(gad_unfilled);
+        
+        % get rid of nans
+        curr_pyr_act(isnan(curr_pyr_act)) = [];
+        curr_gad_act(isnan(curr_gad_act)) = [];
+        
+        [day_frac_n day_frac_activity_grp] = histc(curr_pyr_act,binedge);
+        day_frac_activity_means = grpstats(curr_gad_act,day_frac_activity_grp);
+        day_frac_activity_sems = grpstats(curr_gad_act,day_frac_activity_grp,'sem');
+        
+        day_frac_activity_x_idx = sort(unique(day_frac_activity_grp));
+        day_frac_activity_x = binedge(day_frac_activity_x_idx+1);
+        
+        daily_pyr_gad_corr{i}{curr_day}(:,1) = day_frac_activity_x;
+        daily_pyr_gad_corr{i}{curr_day}(:,2) = day_frac_activity_means;
+        daily_pyr_gad_corr{i}{curr_day}(:,3) = day_frac_activity_sems;
+        
+        p = polyfit(day_frac_activity_x', ...
+            day_frac_activity_means,1);
+        
+        daily_pyr_gad_corr_slope{i}(curr_day) = p(1);
+        
+    end
+    
+    concat_pyr_act = sum(pyr_act_cat)/length(pyr_unfilled);
+    concat_gad_act = sum(gad_act_cat)/length(gad_unfilled);  
+    
+    % get rid of nans
+    concat_pyr_act(isnan(concat_pyr_act)) = [];
+    concat_gad_act(isnan(concat_gad_act)) = [];
+    
+    [all_frac_n all_frac_activity_grp] = histc(concat_pyr_act,binedge);
+    all_frac_activity_means = grpstats(concat_gad_act,all_frac_activity_grp);
+    all_frac_activity_sems = grpstats(concat_gad_act,all_frac_activity_grp,'sem');
+    
+    all_frac_activity_x_idx = sort(unique(all_frac_activity_grp));
+    all_frac_activity_x = binedge(all_frac_activity_x_idx+1);
+    
+    p = polyfit(all_frac_activity_x', ...
+            all_frac_activity_means,1);
+    
+    all_pyr_gad_corr{i}(:,1) = all_frac_activity_x;
+    all_pyr_gad_corr{i}(:,2) = all_frac_activity_means;
+    all_pyr_gad_corr{i}(:,3) = all_frac_activity_sems;
+    all_pyr_gad_corr_slope(i) = p(1);
+    
+    total_concat_pyr_act = [total_concat_pyr_act concat_pyr_act];
+    total_concat_gad_act = [total_concat_gad_act concat_gad_act];
+    
+    
+    % get distance-activity relationship
+    pyr_act_cat(isnan(pyr_act_cat)) = 0;
+    gad_act_cat(isnan(gad_act_cat)) = 0;
+    
+    pyr_gad_dist = roi_dist(pyr_unfilled,gad_unfilled); 
+    distance_bins = [0:5:500];
+    pyr_gad_dist_act = zeros(length(distance_bins)-1,size(pyr_act_cat,2));
+    dist_gad_available = zeros(size(distance_bins));
+    for curr_distance = 1:length(distance_bins)
+        % find gad cells eligible for this (within distance bin of pyr)
+        curr_pyr_gad_dist = pyr_gad_dist < distance_bins(curr_distance);
+        
+        % pull out trial-by-trial which gad cells are eligible
+        curr_gad_idx = cell2mat(arrayfun(@(x) ...
+            any(curr_pyr_gad_dist(logical(pyr_act_cat(:,x)),:),1)', ...
+            [1:size(pyr_act_cat,2)],'uni',false));
+        
+        % get activity of eligible cells for each trial
+        curr_gad_act = zeros(size(gad_act_cat));
+        curr_gad_act(curr_gad_idx) = gad_act_cat(curr_gad_idx);
+        
+        % save fractions active
+        pyr_gad_dist_act(curr_distance,:) = nansum(curr_gad_act)/length(gad_unfilled);
+        
+        % get what fraction of gad cells are available
+        dist_gad_available(curr_distance) = sum(any(curr_pyr_gad_dist))/length(gad_unfilled);
+    end
+    pyr_gad_dist_diff = bsxfun(@minus,nansum(gad_act_cat)/length(gad_unfilled),pyr_gad_dist_act);
+    
+end
+
+% get total combined
+binedge = [0:0.03:1];
+[all_frac_n all_frac_activity_grp] = histc(total_concat_pyr_act,binedge);
+all_frac_activity_means = grpstats(total_concat_gad_act,all_frac_activity_grp);
+all_frac_activity_sems = grpstats(total_concat_gad_act,all_frac_activity_grp,'sem');
+
+all_frac_activity_x_idx = sort(unique(all_frac_activity_grp));
+all_frac_activity_x = binedge(all_frac_activity_x_idx+1);
+figure;errorbar(all_frac_activity_x,all_frac_activity_means,all_frac_activity_sems,'k','linewidth',2)
+
+
+%% Correlate movement-related cells with other movement-related cells
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+sum_move_day_bins = [0:2:14];
+
+all_sum_corr = cell(length(sum_move_day_bins)-1,15,length(animals));
+
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    unfilled_pyr = setdiff(pyr_cells,filled_cells);
+    unfilled_gad = setdiff(gad_cells,filled_cells);
+    
+    sum_move_day = sum(vertcat(classified_cells.move_cells_peak{:}));
+    [n move_day_bin] = histc(sum_move_day,sum_move_day_bins);
+    
+    % find days
+    data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+    data_dir = dir(data_path);
+    data_names = {data_dir.name};
+    data_fullnames = cellfun(@(x) [data_path filesep x],data_names, ...
+        'UniformOutput',false);
+    data_isfolders = cellfun(@(x) isdir(x),data_fullnames);
+    data_folders = data_fullnames(data_isfolders);
+    data_regexp = regexp(data_folders,'\d\d\d\d\d\d');
+    data_days = data_folders(cellfun(@(x) ~isempty(x),data_regexp));
+    days = cellfun(@(x) x(end-5:end),data_days,'UniformOutput',false);
+    
+    start_day = 1;
+    if strmatch(animal,'AP71')
+        start_day = 3;
+    end
+    
+    for curr_day = start_day:length(days)
+        
+        day = num2str(days{curr_day});
+        
+        analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_bgROI'];
+        analysis_name = [day '_' animal '_bgROI_analysis.mat'];
+        load([analysis_path filesep analysis_name]);
+        
+        curr_cells = intersect(find(classified_cells.move_cells_peak{curr_day}),unfilled_pyr);
+        
+%         curr_peaks = AP_trace_peak(im.roi_trace_df(curr_cells,:));
+%         curr_peak_matrix = zeros(size(im.roi_trace_df(curr_cells,:)));
+%         for i = 1:length(curr_cells)
+%             curr_peak_matrix(i,curr_peaks{i}) = 1;
+%         end
+        
+        curr_peak_matrix = im.roi_concat_oopsi(curr_cells,:);
+        
+        spread_frames = 5;
+        spread_frames_filter = ones(1,spread_frames);
+        curr_peak_matrix_spread = conv2(curr_peak_matrix, ...
+            spread_frames_filter,'same');
+        
+        peak_matrix_corrcoef = corrcoef(curr_peak_matrix_spread');
+        
+        %     kidx = kmeans(curr_peak_matrix_spread,5,'distance','correlation');
+        %     [asdf sort_idx] = sort(kidx);
+        %     a = corrcoef(curr_peak_matrix_spread(sort_idx,:)');
+        %     figure;imagesc(a);colormap(hot)
+        
+        for i = 1:length(sum_move_day_bins)-1
+            curr_bin_cells = move_day_bin(curr_cells) == i;
+            tril_matrix = tril(true(nnz(curr_bin_cells)),-1);
+            curr_peak_matrix_corrcoef = peak_matrix_corrcoef(curr_bin_cells, ...
+                curr_bin_cells);
+            all_sum_corr{i,curr_day,curr_animal} = ...
+                curr_peak_matrix_corrcoef(tril_matrix);
+        end
+        
+        disp(curr_day)
+    end
+    disp('end')
+    
+    
+end
+
+cat_data_mean = nan(size(all_sum_corr,1),size(all_sum_corr,2));
+cat_data_sem = nan(size(all_sum_corr,1),size(all_sum_corr,2));
+for curr_day = 1:size(all_sum_corr,2);
+    for curr_bin = 1:size(all_sum_corr,1);
+        curr_data = vertcat(all_sum_corr{curr_bin,curr_day,:});
+        cat_data_mean(curr_bin,curr_day) = nanmean(curr_data);
+        cat_data_sem(curr_bin,curr_day) = nanstd(curr_data)/sqrt(length(curr_data));
+    end
+end
+
+
+%% Get reliability of cells dependent on classification days
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+all_reliability = cell(length(animals),15);
+all_sum_move = cell(length(animals),15);
+
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    unfilled_pyr = setdiff(pyr_cells,filled_cells);
+    unfilled_gad = setdiff(gad_cells,filled_cells);
+
+    sum_move_day = sum(vertcat(classified_cells.move_cells_peak{:}));
+    
+        curr_reliability = cellfun(@(x) nanmean(x,2), ...
+            cell_trial_peak_full{curr_animal}.cued.moving,'uni',false);
+%     curr_reliability = cellfun(@(x,y) nanmean([x y],2), ...
+%         cell_trial_peak_full{curr_animal}.cued.moving, ...
+%         cell_trial_peak_full{curr_animal}.uncued.moving,'uni',false);
+    
+    all_reliability(curr_animal,1:length(curr_reliability)) = ...
+        cellfun(@(x,y) x(intersect(find(y),unfilled_pyr)), ...
+        curr_reliability, classified_cells.move_cells_peak,'uni',false);
+    all_sum_move(curr_animal,1:length(curr_reliability)) = ...
+        cellfun(@(y) sum_move_day(intersect(find(y),unfilled_pyr))', ...
+        classified_cells.move_cells_peak,'uni',false);
+    
+end
+
+% concatenate multiple animals
+cat_reliability = cell(1,15);
+cat_sum_move = cell(1,15);
+for i = 1:15
+   cat_reliability{i} = vertcat(all_reliability{:,i}); 
+   cat_sum_move{i} = vertcat(all_sum_move{:,i});   
+end
+
+% get groupstats for concatenated animals
+a = nan(15,15);
+b = nan(15,15);
+for i = 1:15
+    curr_grp = ceil(cat_sum_move{i}/1);
+    curr_days = length(unique(curr_grp));
+    a(i,1:curr_days) = grpstats(cat_reliability{i},curr_grp);
+    b(i,1:curr_days) = grpstats(cat_reliability{i},curr_grp,'sem');
+end
+
+% get groupstats for individual animals
+a = nan(15,15,8);
+b = nan(15,15,8);
+for j = 1:8
+    for i = 1:15
+        curr_grp = ceil(all_sum_move{j,i}/1);
+        curr_days = unique(curr_grp);
+        if length(curr_days) == 0
+            continue
+        end
+        a(i,curr_days,j) = grpstats(all_reliability{j,i},curr_grp);
+        b(i,curr_days,j) = grpstats(all_reliability{j,i},curr_grp,'sem');
+    end
+end
+
+% combine days
+cat_cat_reliability = cell(1,7);
+cat_cat_sum_move = cell(1,7);
+for i = 1:7
+    cat_cat_reliability{i} = vertcat(cat_reliability{(i-1)*2+1:(i*2)});
+    cat_cat_sum_move{i} = vertcat(cat_sum_move{(i-1)*2+1:(i*2)});
+end
+
+% split up into days 1:2, 3:14, combine move sum days, errorbar
+a = vertcat(cat_reliability{1:2});
+a_sum = vertcat(cat_sum_move{1:2});
+
+b = vertcat(cat_reliability{3:14});
+b_sum = vertcat(cat_sum_move{3:14});
+
+a(a_sum == 15) = [];
+a_sum(a_sum == 15) = [];
+b(b_sum == 15) = [];
+b_sum(b_sum == 15) = [];
+
+a_grp = ceil(a_sum/4);
+a_mean = grpstats(a,a_grp);
+a_sem = grpstats(a,a_grp,'sem');
+
+b_grp = ceil(b_sum/4);
+b_mean = grpstats(b,b_grp);
+b_sem = grpstats(b,b_grp,'sem');
+
+% get mean/sem reliability over days
+a = cellfun(@mean,cat_reliability);
+b = cellfun(@(x) std(x)/length(x),cat_reliability);
+figure
+for i = 1:8
+   subplot(3,3,i)
+   a = cellfun(@mean,all_reliability(i,:));
+   b = cellfun(@(x) std(x)/length(x),all_reliability(i,:));
+   errorbar(a,b,'k')
+end
+
+% scatter plot all reliabilities for move cells in a session, color by days
+% classified as movement-related - by animal
+figure;
+for j = 1:8
+    subplot(3,3,j); hold on
+    for i = 1:15
+        scatter(i+0.5+0.3*rand(size(all_reliability{j,i})),all_reliability{j,i}, ...
+            20,all_sum_move{j,i},'filled')
+    end
+end
+
+
+%% Dig into reliability: why dip on day 3, cell increase v decrease reliability, etc
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+sum_move_day_all = [];
+under_7_all = cell(8,15);
+over_7_all = cell(8,15);
+
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    unfilled_pyr = setdiff(pyr_cells,filled_cells);
+    unfilled_gad = setdiff(gad_cells,filled_cells);
+
+    sum_move_day = sum(vertcat(classified_cells.move_cells_peak{:}));
+    
+    sum_move_day_all = [sum_move_day_all sum_move_day(unfilled_pyr)];
+
+    curr_reliability = cellfun(@(x) nanmean(x,2), ...
+            cell_trial_peak_full{curr_animal}.cued.moving,'uni',false);
+    
+    under_7 = sum_move_day(unfilled_pyr) > 1 & ...
+        sum_move_day(unfilled_pyr) <= 7; % & ...
+        %curr_reliability{3}(unfilled_pyr)' < 0.2; 
+    over_7 = sum_move_day(unfilled_pyr) > 7; % & curr_reliability{3}(unfilled_pyr)' < 0.2; 
+        
+    under_7_all(curr_animal,1:length(curr_reliability)) = ...
+        cellfun(@(x) x(unfilled_pyr(under_7)),curr_reliability,'uni',false);
+    over_7_all(curr_animal,1:length(curr_reliability)) = ...
+        cellfun(@(x) x(unfilled_pyr(over_7)),curr_reliability,'uni',false);
+end
+
+% concatenate multiple animals
+cat_under_7 = cell(1,15);
+cat_over_7 = cell(1,15);
+for i = 1:15
+   cat_under_7{i} = vertcat(under_7_all{:,i}); 
+   cat_over_7{i} = vertcat(over_7_all{:,i});   
+end
+
+% concatenate multiple animals
+cat_reliability = cell(1,15);
+cat_sum_move = cell(1,15);
+for i = 1:15
+   cat_reliability{i} = vertcat(all_reliability{:,i}); 
+   cat_sum_move{i} = vertcat(all_sum_move{:,i});   
+end
+
+% scatter plot all reliabilities for move cells in a session, color by days
+% classified as movement-related
+figure;hold on
+for i = 1:15
+    scatter(i+0.5+0.3*rand(size(cat_reliability{i})),cat_reliability{i}, ...
+        20,cat_sum_move{i},'filled')
+end
+
+% show reliability trajectories for cells classified on a particular day
+start_reliability = cell(size(animals));
+end_reliability = cell(size(animals));
+sum_move_cells = cell(size(animals));
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    unfilled_pyr = setdiff(pyr_cells,filled_cells);
+    unfilled_gad = setdiff(gad_cells,filled_cells);
+    
+    sum_move_day = sum(vertcat(classified_cells.move_cells_peak{:}));
+    vertcat_classified = vertcat(classified_cells.move_cells_peak{:});
+    
+    curr_cells = intersect(unfilled_pyr,find(sum_move_day > 2)); 
+    
+    start_reliability{curr_animal} = nan(size(curr_cells));
+    end_reliability{curr_animal} = nan(size(curr_cells));
+    
+    for i = 1:length(curr_cells)
+       start_day = find(vertcat_classified(:,curr_cells(i)),1);
+       end_day = find(vertcat_classified(:,curr_cells(i)),1,'last');
+       
+       if curr_animal == 1;
+           start_day = start_day + 2;
+           end_day = end_day + 2;
+       end
+       
+       start_reliability{curr_animal}(i) = ...
+           nanmean(cell_trial_peak_full{curr_animal}.cued.moving{start_day} ...
+           (curr_cells(i),:),2);
+       end_reliability{curr_animal}(i) = ...
+           nanmean(cell_trial_peak_full{curr_animal}.cued.moving{end_day} ...
+           (curr_cells(i),:),2);
+    end
+    sum_move_cells{curr_animal} = sum_move_day(curr_cells);
+end
+
+
+figure; hold on
+for i = 1:8
+    scatter(start_reliability{i},end_reliability{i}, ...
+        50,sum_move_cells{i},'filled');
+end
+
+
+
+
+% make # days classified vs. day classified plot
+all_move_days = cell(size(animals));
+for curr_animal = 1:length(animals)
+    
+    animal = animals{curr_animal};
+    
+    load(['/usr/local/lab/People/Andy/Data/Analysis/bhv_classification/' ...
+        animal '_classified_cells_move_epoch_shuffle.mat'])
+    
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+    
+    unfilled_pyr = setdiff(pyr_cells,filled_cells);
+    unfilled_gad = setdiff(gad_cells,filled_cells);
+    
+    sum_move_day = sum(vertcat(classified_cells.move_cells_peak{:}));
+    vertcat_classified = vertcat(classified_cells.move_cells_peak{:});
+    
+    all_move_days{curr_animal} = arrayfun(@(x) ...
+        find(vertcat_classified(:,x)), ...
+        unfilled_pyr,'uni',false);
+end
+
+figure; hold on
+for j = 1:8
+    for i = 1:length(all_move_days{j})
+        if isempty(all_move_days{j}{i})
+            continue
+        end
+        
+        y = all_move_days{j}{i};
+        x = repmat(length(y),[length(y) 1]);
+        
+        plot(x+0.3*(rand(size(x))-0.5),y+0.3*(rand(size(x))-0.5),'.k');
+    end
+end
+xlabel('# days classified');ylabel('day classified');
+
+
+move_cell_grid = zeros(15,15,8);
+for j = 1:8
+    for i = 1:length(all_move_days{j})
+        if isempty(all_move_days{j}{i})
+            continue
+        end
+        
+        y = all_move_days{j}{i};
+        x = repmat(length(y),[length(y) 1]);
+        
+        move_cell_grid(y,x,j) = move_cell_grid(y,x,j) + 1;
+    end
+end
+
+move_grid_split = cell2mat(reshape(arrayfun(@(x) ...
+    [sum(move_cell_grid(1:14,1:7,x),2) ...
+    sum(move_cell_grid(1:14,8:14,x),2)],1:8,'uni',false),[1,1,8]));
+
+move_grid_split_norm = bsxfun(@times,move_grid_split, ...
+    1./sum(move_grid_split));
+
+a = sum(move_cell_grid,3);
+a_norm = bsxfun(@times,a,1./sum(a,1));
+figure;imagesc(a_norm);colormap(hot);
+xlabel('# days classified');ylabel('day classified');
+
+a_sum = [sum(a(1:14,1:7),2) sum(a(1:14,8:14),2)];
+a_sum_norm = bsxfun(@times,a_sum,1./sum(a_sum));
+
+
+
+%% Get trial correlations over time
+% Mean correlation/day correlation by max df
+
+animals = {'AP71' 'AP72' 'AP73' 'AP74' 'AP75' 'AP76' 'AP78' 'AP79'};
+
+% load trial-by-trial activity
+load('/usr/local/lab/People/Andy/Data/Analysis/trial_activity/cell_trial_all_activity_rewmove.mat');
+
+all_mean_correlation = nan(15,15,8);
+all_day_correlation = nan(8,15);
+all_day_dot = nan(8,15);
+concat_day_correlation = cell(8,15);
+
+for curr_animal = 1:8
+    animal = animals{curr_animal};
+       
+    % load ROI labels and identify cell type
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];    
+    roilabel_name = [animal '_roilabels.roilabel'];
+    load([analysis_path filesep roilabel_name],'-MAT')
+    cells = 1:length(roi_labels);
+    gad_cells = find(cellfun(@(x) any(strcmp('gad',x)),roi_labels))';
+    pyr_cells = cells(~ismember(cells,gad_cells));
+    filled_cells = find(cellfun(@(x) any(strcmp('filled',x)),roi_labels))';
+
+    % get usable cells
+    pyr_unfilled = setdiff(pyr_cells,filled_cells);
+    
+    % pick measure of trial activity
+    curr_measure = cell_trial_df_full;
+
+    curr_measure_cells = cellfun(@(x,y) max(...
+        cat(3,x(pyr_unfilled,:),y(pyr_unfilled,:)),[],3), ...
+        curr_measure{curr_animal}.cued.moving, ...
+        curr_measure{curr_animal}.cued.quiescent,'uni',false);
+    
+%     curr_measure_cells = cellfun(@(x) x(pyr_unfilled,:), ...
+%         curr_measure{curr_animal}.cued.moving,'uni',false);
+    
+    for i = 1:length(curr_measure_cells)
+       curr_measure_cells{i}(isnan(curr_measure_cells{i})) = 0;
+    end
+    
+    curr_measure_cells_corrcoef = cellfun(@corrcoef, ...
+        curr_measure_cells,'uni',false);
+    curr_measure_cells_corrcoef_mean = cellfun(@(x) ...
+        nanmean(x(tril(true(size(x)),-1))), curr_measure_cells_corrcoef); 
+    
+    curr_measure_cells_dot = cellfun(@(x) x'*x, ...
+        curr_measure_cells,'uni',false);
+    curr_measure_cells_dot_mean = cellfun(@(x) ...
+        nanmean(x(tril(true(size(x)),-1))), curr_measure_cells_dot);
+    
+    curr_measure_cells_mean = cell2mat(cellfun(@(x) nanmean(x,2), ...
+        curr_measure_cells,'uni',false));
+    
+    start_day = 1;
+    if curr_animal == 1;
+        start_day = 3;
+    end
+    
+    all_day_correlation(curr_animal, ...
+        start_day:length(curr_measure_cells_corrcoef_mean)) = ...
+        curr_measure_cells_corrcoef_mean(start_day:end);
+    all_day_dot(curr_animal, ...
+        start_day:length(curr_measure_cells_dot_mean)) = ...
+        curr_measure_cells_dot_mean(start_day:end);
+    
+    curr_mean_corrcoef = corrcoef(curr_measure_cells_mean);
+    all_mean_correlation(start_day:size(curr_measure_cells_mean,2), ...
+        start_day:size(curr_measure_cells_mean,2),curr_animal) = ...
+        curr_mean_corrcoef(start_day:end,start_day:end);
+    
+    concat_day_correlation(curr_animal, ...
+        start_day:length(curr_measure_cells_corrcoef)) = cellfun(@(x) ...
+        x(tril(true(size(x)),-1)), curr_measure_cells_corrcoef(start_day:end),'uni',false);
+
+end
+
+concat_concat_day_correlation = cell(1,15);
+for i = 1:15
+    concat_concat_day_correlation{i} = vertcat(concat_day_correlation{:,i});
+end
+concat_day_correlation_mean = cellfun(@nanmean,concat_concat_day_correlation);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

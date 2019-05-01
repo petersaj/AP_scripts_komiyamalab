@@ -1,0 +1,331 @@
+%% Smooth df trace
+
+smoothed_roi_df = cell(14,1);
+for i = 1:14
+    
+    roi_trace_df_smooth = nan(size(data.im(i).roi_trace_df));
+    for curr_roi = 1:size(roi_trace_df_smooth,1);
+        roi_trace_df_smooth(curr_roi,:) = smooth(data.im(i).roi_trace_df(curr_roi,:),30,'loess');
+    end
+    
+    smoothed_roi_df{i} = roi_trace_df_smooth;
+    
+    disp(i)
+    
+end
+
+
+%% Compare raw trace to interpolation subtracted background
+
+
+curr_data = load('/usr/local/lab/People/Andy/Data/AP140/AP140_batch_thresh_roi/150719_AP140_001_001_summed_50_analysis.mat');
+
+curr_df = AP_baselineEstimation(curr_data.im.roi_trace,30);
+curr_interpsub_df = curr_data.im.roi_trace_df;
+
+n_rois = size(curr_df,1);
+
+df_corr = zeros(size(curr_df,1),1);
+for i = 1:n_rois
+    curr_corr = corrcoef(curr_interpsub_df(i,:),curr_df(i,:));
+    df_corr(i) = curr_corr(2);
+end
+
+[~,sort_idx] = sort(df_corr);
+
+
+%% Significantly modulated ROIs (the old way)
+% NOTE: requires loaded/prepared data
+
+classified_rois = struct('movement',cell(length(data),1),'quiescent',cell(length(data),1));
+for curr_animal = 1:length(data);
+    
+    n_rois = size(data(curr_animal).im(1).roi_trace_df,1);
+    n_sessions = length(data(curr_animal).im);
+    
+    classified_rois(curr_animal).movement = false(n_rois,n_sessions);
+    classified_rois(curr_animal).quiescent = false(n_rois,n_sessions);
+    
+    for curr_session = 1:n_sessions
+             
+        lever_active_frames = analysis(curr_animal).lever(curr_session).lever_move_frames;
+        num_frames = size(data(curr_animal).im(curr_session).roi_trace_df,2);
+        
+        % Split active frames by movement blocks / quiescent frames
+        % (to split up by movement blocks / quiescent blocks)
+        %lever_active_frames_nan = +lever_active_frames;
+        %lever_active_frames_nan(~lever_active_frames) = NaN;
+        boundary_frames = find(diff([Inf;lever_active_frames;Inf]) ~= 0);
+        lever_active_frames_split = mat2cell(lever_active_frames,diff(boundary_frames));
+        
+        % Get activity during movement/quiescence
+        movement_activity = +(data(curr_animal).im(curr_session).roi_trace_thresh(:,1:num_frames) > 0)*lever_active_frames;
+
+        % Get shuffled activity distribution
+        num_rep = 10000;
+        shuffle_perms = shake(repmat([1:length(lever_active_frames_split)]',1,num_rep),1);
+        lever_active_shuffle = nan(length(lever_active_frames),num_rep);
+        for i = 1:num_rep
+           lever_active_shuffle(:,i) = ...
+               vertcat(lever_active_frames_split{shuffle_perms(:,i)});
+        end
+        clear shuffle_perms
+        
+        shuffle_movement_activity = +(data(curr_animal).im(curr_session).roi_trace_thresh(:,1:num_frames) > 0)*lever_active_shuffle;
+        clear lever_active_shuffle
+
+        movement_rank = tiedrank([movement_activity shuffle_movement_activity]')';
+        movement_p = movement_rank(:,1)/(num_rep+1);
+        movement_cells = movement_p > 0.975;
+        quiescent_cells = movement_p < 0.025;
+        
+        classified_rois(curr_animal).movement(:,curr_session) = movement_cells;
+        classified_rois(curr_animal).quiescent(:,curr_session) = quiescent_cells;
+        
+        disp(['Classified session ' num2str(curr_session)]);
+    end
+    
+    disp(['Classified ' data(curr_animal).animal]);
+end
+disp('Finished all')
+
+
+%% Plot PCA of average activity (movement, quiescent, all)
+% requires sigcells
+
+curr_movecells = any(classified_rois(1).movement,2);
+curr_quiescentcells = any(classified_rois(1).quiescent,2);
+
+avg_act = nan(size(analysis.im(1).move_onset_aligned,3), ...
+    size(analysis.im(1).move_onset_aligned,2),14);
+for i = 1:14
+    avg_act(:,:,i) = permute(nanmean(analysis.im(i).move_onset_aligned,1),[3 2 1]); 
+end
+
+use_cells = curr_movecells;
+avg_act_reshape = reshape(permute(avg_act(use_cells,:,:),[2 3 1]),size(avg_act,2)*size(avg_act,3),[]);
+[coeff,score,latent] = pca(avg_act_reshape);
+avg_act_score = mat2cell(score,repmat(size(avg_act,2),size(avg_act,3),1),size(score,2));
+
+col = jet(14);
+figure; hold on
+for i = 1:14
+plot3(avg_act_score{i}(:,2),avg_act_score{i}(:,3),avg_act_score{i}(:,4), ...
+    'color',col(i,:),'linewidth',2)
+end
+
+
+%% Activity correlation
+
+act_aligned_corr_move = nan(14,14,length(data));
+act_total_corr_move = nan(14,14,length(data));
+
+act_aligned_corr_move = nan(14,14,length(data));
+act_total_corr_move = nan(14,14,length(data));
+for curr_animal = 1:length(data);
+    
+    % Correlation of aligned movement activity
+    % NOTE: this looks the same regardless of alignment...
+    curr_movecells = any(classified_rois(curr_animal).movement,2);
+    curr_quiescentcells = any(classified_rois(curr_animal).quiescent,2);
+    
+    use_cells = find(curr_movecells);
+    
+    %use_frames = analysis.surrounding_frames >= 0 & analysis.surrounding_frames <= 90;
+    %use_frames = analysis.surrounding_frames < 0;
+    use_frames = true(size(analysis(curr_animal).surrounding_frames));
+    
+    avg_aligned_act = nan(length(use_cells),sum(use_frames),14);
+    for i = 1:14
+        avg_aligned_act(:,:,i) = permute(nanmean(analysis(curr_animal).im(i).move_onset_aligned(:,use_frames,use_cells),1),[3 2 1]);
+    end
+    
+    act_aligned_reshape = reshape(permute(avg_aligned_act,[2 1 3]),[],size(avg_aligned_act,3));
+    act_aligned_corr(:,:,curr_animal) = corrcoef(act_aligned_reshape);
+    
+    % Correlation of average activity
+    avg_total_act = nan(length(use_cells),14);
+    for i = 1:14
+        avg_total_act(:,i) = nanmean(data(curr_animal).im(i).roi_trace_thresh(use_cells,:),2);
+    end
+    act_total_corr(:,:,curr_animal) = corrcoef(avg_total_act);  
+    
+    
+    
+end
+
+
+
+
+
+%% Activity during quiescence / movement
+
+curr_movecells = any(classified_rois(1).movement,2);
+curr_quiescentcells = any(classified_rois(1).quiescent,2);
+
+use_cells = 1:length(curr_movecells);
+
+% Correlation of average activity
+avg_total_act_movement = nan(length(use_cells),14);
+avg_total_act_quiescent = nan(length(use_cells),14);
+
+for i = 1:14
+    avg_total_act_movement(:,i) = nanmean(data.im(i).roi_trace_thresh(use_cells,analysis.lever(i).lever_move_frames),2);
+    avg_total_act_quiescent(:,i) = nanmean(data.im(i).roi_trace_thresh(use_cells,~analysis.lever(i).lever_move_frames),2);
+end
+
+figure;
+subplot(1,2,1);
+imagesc(corrcoef(avg_total_act_movement));colormap(hot);
+title('Average movement activity correlation')
+subplot(1,2,2);
+imagesc(corrcoef(avg_total_act_quiescent));colormap(hot);
+title('Average quiescent activity correlation')
+
+
+
+%% Activity timing: std of activity onset from movement onset
+
+act_std_all = cell(1,length(data));
+for curr_animal = 1:length(data);
+    
+    use_frames = analysis(curr_animal).surrounding_frames >= 0 & analysis(curr_animal).surrounding_frames <= 90;
+
+    act_starts = cell(14,size(data(curr_animal).im(1).roi_trace_df,1));
+    
+    for i = 1:14
+        [curr_max,curr_max_idx] = max(analysis(curr_animal).im(i).move_onset_aligned(:,use_frames,:) > 0,[],2);
+        curr_act_starts = arrayfun(@(x) curr_max_idx(curr_max(:,:,x),:,x),1:size(curr_max,3),'uni',false);
+        act_starts(i,:) = curr_act_starts';
+    end
+    
+    act_std = cellfun(@nanstd,act_starts);
+    num_act = cellfun(@length,act_starts);
+    min_num_act = 5;
+    act_std(num_act < min_num_act) = NaN;
+    
+    % Get activity of only movement_related cells
+    act_std(~classified_rois(curr_animal).movement') = NaN;
+    
+    act_std_all{curr_animal} = act_std;
+end
+
+figure;
+framerate = 29; % just estimating for now
+act_std_mean_cat = cell2mat(cellfun(@(x) nanmean(x,2)./framerate,act_std_all,'uni',false));
+errorbar(nanmean(act_std_mean_cat,2),nanstd(act_std_mean_cat,[],2)./sqrt(sum(~isnan(act_std_mean_cat),2)),'k','linewidth',2);
+xlabel('Day');
+ylabel('Standard devation of movement-cell activity timing (s)')
+
+%% Get movement aligned to activity onset
+n_rois = size(data.im(1).roi_trace_thresh,1);
+
+% Raw lever trace
+back_time = 3000;
+forward_time = 3000;
+act_aligned_move = nan(n_rois,back_time+forward_time+1,14);
+
+for curr_session = 1:14;
+    
+    % downsample lever
+    downsample_factor = 100;
+    lever_force_resample = resample(data.bhv(curr_session).lever_force,1,downsample_factor);
+    for curr_cell = 1:n_rois
+        curr_act_starts = find(diff([0 data.im(curr_session).roi_trace_thresh(curr_cell,:)>0]) == 1);
+        curr_act_start_time = round(data.bhv(curr_session).frame_times(curr_act_starts)*(10000/downsample_factor));
+        curr_act_start_time(curr_act_start_time-back_time <= 0 | ...
+            curr_act_start_time + forward_time > length(lever_force_resample)) = [];
+        curr_act_move = cell2mat(arrayfun(@(x) lever_force_resample( ...
+            x-back_time:x+forward_time),curr_act_start_time','uni',false))';
+        
+        act_aligned_move(curr_cell,:,curr_session) = nanmean(curr_act_move);
+    end
+end
+
+% Movement-binarized lever
+back_time = 29*30;
+forward_time = 29*30;
+act_aligned_move_binary = nan(n_rois,back_time+forward_time+1,14);
+
+for curr_session = 1:14;
+    for curr_cell = 1:n_rois
+        curr_act_starts = find(diff([0 data.im(curr_session).roi_trace_thresh(curr_cell,:)>0]) == 1);
+        curr_act_starts(curr_act_starts-back_time <= 0 | ...
+            curr_act_starts + forward_time > length(analysis.lever(curr_session).lever_move_frames)) = [];
+        curr_act_move = cell2mat(arrayfun(@(x) analysis.lever(curr_session).lever_move_frames( ...
+            x-back_time:x+forward_time),curr_act_starts,'uni',false))';
+        
+        act_aligned_move_binary(curr_cell,:,curr_session) = nanmean(curr_act_move);
+    end
+end
+
+% Get standard deviation of maximum movement probability timing
+[~,max_idx] = arrayfun(@(x) max(act_aligned_move_binary(classified_rois.movement(:,x) > 0,:,x),[],2),1:14,'uni',false);
+move_timing_std = cellfun(@nanstd,max_idx);
+
+
+
+%% Get spacing of activity (i.e. clumped or evenly distributed)
+
+
+
+
+
+%% Find cells that are present / active
+
+
+
+%% Plot fraction of movement/quiescence ROIs
+
+move_frac = cell2mat(cellfun(@(x) nanmean(x,1),{classified_rois(:).movement}','uni',false));
+quiescent_frac = cell2mat(cellfun(@(x) nanmean(x,1),{classified_rois(:).quiescent}','uni',false));
+figure; hold on
+errorbar(nanmean(move_frac),nanstd(move_frac)./sqrt(sum(~isnan(move_frac))),'k','linewidth',2)
+errorbar(nanmean(quiescent_frac),nanstd(quiescent_frac)./sqrt(sum(~isnan(quiescent_frac))),'r','linewidth',2)
+ylabel('Fraction of ROIs');
+xlabel('Day');
+legend({'Movement-related' 'Quiescence-related'})
+
+mq_ratio = move_frac./quiescent_frac;
+figure;
+errorbar(nanmean(mq_ratio),nanstd(mq_ratio)./sqrt(sum(~isnan(mq_ratio))),'k','linewidth',2);
+ylabel('Movement/Quiescent fraction')
+xlabel('Day')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,113 @@
+function caEvents = AP_caEvents_thresh(df_matrix,thresh,method)
+% caEvent_matrix = AP_caEvents_threshtest(df_matrix,thresh,type)
+% Create a matrix of calcium events from raw df/f traces
+% 'thresh' - noise multiplier threshold
+%
+% method: 
+% 0 (default) = zero inactive portions of the trace
+% 1 = zero the trace when df/f is falling
+% 2 = retain linear slope of increasing active df/f portions
+
+if nargin < 3
+    method = 0;
+end
+
+num_cells = size(df_matrix,1);
+
+% Discard cells that contain all NaNs and zero occasional NaNs (is this ok?)
+discard_cells = false(num_cells,1);
+discard_cells(all(isnan(df_matrix),2)) = true;
+df_matrix(isnan(df_matrix)) = 0;
+
+use_cells = find(~discard_cells);
+
+% Initialize calcium events matrix
+caEvents = nan(size(df_matrix));
+
+% Initialize gad event matrix
+disp('Finding calcium events...')
+fprintf('%2d%%',0);
+for curr_cell = use_cells'
+    
+    curr_trace = df_matrix(curr_cell,:);
+    
+    temp_smooth_30 = smooth(curr_trace,30,'loess')';
+    
+    %noise_est = mean(abs(df_matrix(curr_cell,:) - temp_smooth));
+    % NEW NOISE EST: the std of (mirrored) below-zero df/f values
+    below_zero_trace = curr_trace(curr_trace < 0);
+    noise_est = std([below_zero_trace -below_zero_trace]);
+    
+    thresh_lo = temp_smooth_30 > noise_est*1;
+    thresh_hi = temp_smooth_30 > noise_est*thresh;
+    
+    % find edges of long-smooth above-thresh periods
+    thresh_lo_start = diff([0 thresh_lo 0]) == 1;
+    thresh_lo_stop = diff([0 thresh_lo 0]) == -1;
+    thresh_hi_start = find(diff([0 thresh_hi 0]) == 1);
+    thresh_hi_stop = find(diff([0 thresh_hi 0]) == -1);
+    
+    thresh_lo_hi_smooth_idx = arrayfun(@(x,y) ...
+        x-find(thresh_lo_start(x:-1:1),1)+1:y, ...
+        thresh_hi_start,thresh_hi_stop,'uni',false);
+    
+    % don't bother trying to find activity that starts before imaging or
+    % continues after last frame
+    exclude_activity = cellfun(@(x) any(x(x <= 1 | ...
+        x >= length(curr_trace))),thresh_lo_hi_smooth_idx);
+    
+    % refine start times of activity to when df/f goes about hi thresh
+    thresh_lo_hi_raw_idx = cellfun(@(x) x(1) +...
+        find(curr_trace(x:end) > noise_est*thresh,1) - ...
+        find(curr_trace(x(1)+find(curr_trace(x:end) > noise_est*thresh,1):-1:1) < noise_est*1,1): ...
+        x(end),thresh_lo_hi_smooth_idx(~exclude_activity),'uni',false);
+    
+    % again, filter out events that overlap with beginning or end
+    exclude_activity_2 = cellfun(@(x) any(x(x <= 1 | ...
+        x >= length(curr_trace))),thresh_lo_hi_raw_idx);
+    thresh_lo_hi_raw_idx(exclude_activity_2) = [];
+    
+    % Create trace from chosen method
+    switch method
+        % 0 (default) = retain over-threshold, zero others
+        case 0
+            over_thresh_frames = horzcat(thresh_lo_hi_raw_idx{:});
+            caEvents(curr_cell,:) = 0;
+            caEvents(curr_cell,over_thresh_frames) = curr_trace(over_thresh_frames);
+            
+        % 1 = retain over-threshold & increasing, zero others
+        case 1
+            thresh_lo_hi_rising = cellfun(@(x) x(diff([0 temp_smooth_30(x)]) > 0), ...
+                thresh_lo_hi_raw_idx,'uni',false);
+            
+            over_thresh_frames = horzcat(thresh_lo_hi_rising{:});
+            
+            caEvents(curr_cell,:) = 0;
+            caEvents(curr_cell,over_thresh_frames) = curr_trace(:,over_thresh_frames);
+        % 2 = retain slope of over-threshold & increasing portions
+        case 2
+            thresh_lo_hi_rising = cellfun(@(x) x(diff([0 temp_smooth_30(x)]) > 0), ...
+                thresh_lo_hi_raw_idx,'uni',false);
+            thresh_lo_hi_rising_slope = cellfun(@(x) repmat((max(curr_trace(x)) - ...
+                min(curr_trace(x)))./length(x),1,length(x)),thresh_lo_hi_rising,'uni',false);
+            
+            over_thresh_frames = horzcat(thresh_lo_hi_rising{:});
+            over_thresh_values = horzcat(thresh_lo_hi_rising_slope);
+            
+            caEvents(curr_cell,:) = 0;
+            
+    end
+    
+    fprintf('%c%c%c%2d%%',8,8,8,round(100*curr_cell/num_cells));
+end
+fprintf('%c%c%c%c',8,8,8,8,8)
+disp('Done.')
+
+
+
+
+
+
+
+
+

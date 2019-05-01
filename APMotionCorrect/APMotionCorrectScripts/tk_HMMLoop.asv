@@ -1,0 +1,27 @@
+function tk_HHMLoop(filedir, referencefilename, loadmode,maxdx,maxdy,numchannels, lambda)
+if isempty(filedir)
+    filedir  = uigetdir('E:\ImagingData','Pick a source directory');
+else
+    if ~isdir(filedir)
+        error('Second argument must be a valid directory');
+    end
+end
+if ~exist('referencefilename')
+    [referencefilename,referencepathname]=uigetfile('*.tif','pick your reference file');
+else
+        [referencepathname, referencefilename] = fileparts(referencefilename);
+end
+fullreferencefilename=[referencepathname referencefilename];
+
+files = dir(filedir);
+fileNames = {files.name};
+
+h=waitbar(0,'removing red channel...');
+for i=3:length(files)
+    waitbar(i/length(files));
+    [PATHSTR,NAME,EXT,VERSN] = fileparts(files(i).name);
+    if isequal(EXT, '.tif')
+        tk_HMM([filedir filesep files(i).name], fullreferencefilename, );
+    end
+end
+close(h)

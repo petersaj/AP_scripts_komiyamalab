@@ -1,0 +1,38 @@
+%% Batch template
+clear all
+
+animal = 'AP74';
+
+% find days
+data_path = ['/usr/local/lab/People/Andy/Data/' animal];
+data_dir = dir(data_path);
+data_names = {data_dir.name};
+data_fullnames = cellfun(@(x) [data_path filesep x],data_names, ...
+    'UniformOutput',false);
+data_isfolders = cellfun(@(x) isdir(x),data_fullnames);
+data_folders = data_fullnames(data_isfolders);
+data_regexp = regexp(data_folders,'\d\d\d\d\d\d');
+data_days = data_folders(cellfun(@(x) ~isempty(x),data_regexp));
+days = cellfun(@(x) x(end-5:end),data_days,'UniformOutput',false);
+
+grab_var = cell(size(days));
+
+for curr_day = 1:length(days)
+    %%%% Initialize
+    clearvars -except animal days curr_day grab_var
+    
+    day = num2str(days{curr_day});
+    
+    analysis_path = ['/usr/local/lab/People/Andy/Data/' animal filesep animal '_roi_template'];
+    analysis_name = [day '_' animal '_summed_50_template_analysis.mat'];
+    load([analysis_path filesep analysis_name]);
+    
+    %%%% Process
+    
+    %%%% Save
+    grab_var{curr_day} =  [];
+    
+    disp(['Finished day: ' day]);
+    
+end
+disp(['Finished all.']);

@@ -1,0 +1,56 @@
+%% Plot spike-triggered lever press average
+
+% get frame rate
+% pick sample files
+[img_filename img_path] = uigetfile('*.tif','Pick sample file','Multiselect','off');
+img_info = imfinfo([img_path img_filename]);
+img_info = img_info(1).ImageDescription;
+
+[xsg_filename xsg_path] = uigetfile('*.xsg','Pick sample file','Multiselect','off');
+xsg = load([xsg_path xsg_filename],'-MAT');
+xsg_sample_rate = xsg.header.acquirer.acquirer.sampleRate;
+
+% FINALLY FIGURED OUT HOW TO CORRECTLY PARSE HEADER!
+[img_parameter img_value] = strread(img_info,'%s %s', 'delimiter','=\n');
+
+% Get framerate from header
+framerate_indx = cell2mat(cellfun(@(x) ~isempty(strfind(x,'scanimage.SI4.scanFrameRate')),img_parameter,'UniformOutput',0));
+framerate = str2num(img_value{framerate_indx});
+
+% requires roi_trace_df, getForceLeverTimes and detecting spikes
+
+% convert from frames to sample: frames * sec/frame * samples/sampls
+
+spike_triggered_avg = {size(roi_trace_df,1),1};
+lever_surround_sec = 0.5;
+lever_surround_sample = lever_surround_sec*xsg_sample_rate;
+
+for i = 1:size(roi_trace_df,1)
+    if ~isempty(spike_frames{i});
+        for curr_spike = 1:length(spike_frames{i})
+            frame_to_xsg = spike_frames{i}(curr_spike)*(1/framerate)*(xsg_sample_rate);
+            curr_lever = lever_force(round((frame_to_xsg-(lever_surround_sample/2))):round((frame_to_xsg+(lever_surround_sample/2))))';
+            spike_triggered_avg{i} = [spike_triggered_avg{i};curr_lever];
+        end
+    end
+end
+
+% 
+% reward_trials_num = find(reward_trials == 1);
+% lever_surround_sec = 0.5;
+% lever_surround_sample = lever_surround_sec*xsg_sample_rate;
+% lever_force_reward = nan(num_trials,lever_surround_sample+1);
+% force_point = nan(num_trials,1);
+% for curr_reward_trial = reward_trials_num';
+%     % Skip this if trial start wasn't recorded
+%     if ~isnan(xsg_bhv_offset(curr_reward_trial)) & ...
+%             ~ismember(curr_reward_trial,trial_stitch)
+%     % Current xsg trial time
+%     xsg_trial_indx = find(trial_list(:,2) == curr_reward_trial);
+%     lever_sample_bhv = (parsed_events{curr_reward_trial}.pokes.L(lever_cue_indx{curr_reward_trial},1) - all_trial_start{curr_reward_trial}(1))*(xsg_sample_rate);
+%     % xsg lever time = relative lever sample trial start + xsg trial start
+%     lever_sample_xsg = lever_sample_bhv + trial_list(xsg_trial_indx,1);
+%     lever_force_reward(curr_reward_trial,:) = lever_force(round((lever_sample_xsg-(lever_surround_sample/2))):round((lever_sample_xsg+(lever_surround_sample/2))));
+%     force_point(curr_reward_trial) = lever_sample_xsg;
+%     end
+% end
